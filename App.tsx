@@ -884,33 +884,52 @@ function AppContent() {
         </Pressable>
       </View>
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.title}>הזמנות – שלב ראשון</Text>
-        <Text style={styles.subtitle}>
-          שלום {userName}, ניהול הזמנות, תשלומים וסטטוסים
-        </Text>
-
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryTitle}>סיכום מהיר</Text>
-          <Text style={styles.summaryText}>סה״כ הזמנות: {totals.count}</Text>
-          <Text style={styles.summaryText}>
-            סכום ששולם עד כה: ₪{totals.totalPaid.toLocaleString('he-IL')}
-          </Text>
-          <Text style={styles.summaryNote}>
-            יצוא לאקסל ודו״ח הוצאות יתווספו בהמשך.
+        <View style={styles.ordersPageHeader}>
+          <Text style={styles.ordersPageTitle}>הזמנות</Text>
+          <Text style={styles.ordersPageSubtitle}>
+            שלום {userName}, ניהול הזמנות, תשלומים וסטטוסים
           </Text>
         </View>
 
-        {orders.map(order => (
-          <OrderCard
-            key={order.id}
-            order={order}
-            onUpdate={updateOrder}
-            onEdit={id => {
-              setSelectedOrderId(id);
-              setScreen('orderEdit');
-            }}
-          />
-        ))}
+        <View style={styles.summaryCardEnhanced}>
+          <View style={styles.summaryCardHeader}>
+            <Text style={styles.summaryTitleEnhanced}>סיכום מהיר</Text>
+          </View>
+          <View style={styles.summaryStatsRow}>
+            <View style={styles.summaryStatItem}>
+              <Text style={styles.summaryStatValue}>{totals.count}</Text>
+              <Text style={styles.summaryStatLabel}>הזמנות</Text>
+            </View>
+            <View style={styles.summaryStatDivider} />
+            <View style={styles.summaryStatItem}>
+              <Text style={styles.summaryStatValue}>₪{totals.totalPaid.toLocaleString('he-IL')}</Text>
+              <Text style={styles.summaryStatLabel}>שולם עד כה</Text>
+            </View>
+          </View>
+          <View style={styles.summaryNoteContainer}>
+            <Text style={styles.summaryNoteEnhanced}>
+              יצוא לאקסל ודו״ח הוצאות יתווספו בהמשך
+            </Text>
+          </View>
+        </View>
+
+        {orders.length === 0 ? (
+          <View style={styles.emptyOrdersState}>
+            <Text style={styles.emptyOrdersText}>אין הזמנות כרגע</Text>
+          </View>
+        ) : (
+          orders.map(order => (
+            <OrderCard
+              key={order.id}
+              order={order}
+              onUpdate={updateOrder}
+              onEdit={id => {
+                setSelectedOrderId(id);
+                setScreen('orderEdit');
+              }}
+            />
+          ))
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -932,47 +951,147 @@ function OrderCard({ order, onEdit }: OrderCardProps) {
       ? Math.round((order.paidAmount / order.totalAmount) * 100)
       : 0,
   );
+
+  const getStatusColor = (status: OrderStatus) => {
+    switch (status) {
+      case 'חדש':
+        return { bg: '#fef3c7', border: '#fbbf24', text: '#92400e' };
+      case 'באישור':
+        return { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af' };
+      case 'שולם חלקית':
+        return { bg: '#fce7f3', border: '#ec4899', text: '#9f1239' };
+      case 'שולם':
+        return { bg: '#d1fae5', border: '#10b981', text: '#065f46' };
+      case 'בוטל':
+        return { bg: '#fee2e2', border: '#ef4444', text: '#991b1b' };
+      default:
+        return { bg: '#f3f4f6', border: '#9ca3af', text: '#374151' };
+    }
+  };
+
+  const statusColors = getStatusColor(order.status);
+  const remainingAmount = order.totalAmount - order.paidAmount;
+
   return (
-    <View style={[styles.card, styles.orderCard]}>
-      <Text style={styles.cardTitle}>{order.unitNumber}</Text>
-      <Text style={styles.cardLine}>
-        אורח: {order.guestName} • {order.guestsCount} אורחים
-      </Text>
-      <Text style={styles.cardLine}>
-        {order.arrivalDate} - {order.departureDate}
-      </Text>
-      <Text style={styles.cardLine}>סטטוס נוכחי: {order.status}</Text>
-      <Text style={styles.cardLine}>
-        סכום מלא: ₪{order.totalAmount.toLocaleString('he-IL')} • שולם: ₪
-        {order.paidAmount.toLocaleString('he-IL')}
-      </Text>
-      <Text style={styles.cardLine}>
-        אופן תשלום: {order.paymentMethod || 'לא צוין'}
-      </Text>
-      {order.specialRequests ? (
-        <Text style={styles.cardLine}>בקשות: {order.specialRequests}</Text>
-      ) : null}
-      {order.internalNotes ? (
-        <Text style={styles.cardLine}>הערות פנימיות: {order.internalNotes}</Text>
-      ) : null}
-      <View style={styles.progressWrap}>
-        <View style={styles.progressHeader}>
-          <Text style={styles.progressLabel}>
-            סכום מלא: ₪{order.totalAmount.toLocaleString('he-IL')}
-          </Text>
-          <Text style={styles.progressValue}>שולם {paidPercent}%</Text>
+    <View style={[styles.card, styles.orderCardEnhanced]}>
+      {/* Header with Unit and Status */}
+      <View style={styles.orderCardHeaderEnhanced}>
+        <View style={styles.orderCardHeaderLeft}>
+          <View style={styles.orderCardTitleContainer}>
+            <Text style={styles.orderCardUnitTitle}>{order.unitNumber}</Text>
+            <Text style={styles.orderCardId}>#{order.id}</Text>
+          </View>
         </View>
-        <View style={styles.progressBar}>
+        <View style={[styles.statusBadgeEnhanced, { backgroundColor: statusColors.bg, borderColor: statusColors.border }]}>
+          <Text style={[styles.statusBadgeTextEnhanced, { color: statusColors.text }]}>
+            {order.status}
+          </Text>
+        </View>
+      </View>
+
+      {/* Guest Info Section */}
+      <View style={styles.orderInfoSection}>
+        <View style={styles.orderInfoRow}>
+          <View style={styles.orderInfoContent}>
+            <Text style={styles.orderInfoLabel}>אורח</Text>
+            <Text style={styles.orderInfoValue}>{order.guestName}</Text>
+          </View>
+          <View style={styles.orderInfoContent}>
+            <Text style={styles.orderInfoLabel}>מספר אורחים</Text>
+            <Text style={styles.orderInfoValue}>{order.guestsCount} אנשים</Text>
+          </View>
+        </View>
+
+        {/* Dates */}
+        <View style={styles.orderInfoRow}>
+          <View style={styles.orderInfoContent}>
+            <Text style={styles.orderInfoLabel}>תאריך הגעה</Text>
+            <Text style={styles.orderInfoValue}>{order.arrivalDate}</Text>
+          </View>
+          <View style={styles.orderInfoContent}>
+            <Text style={styles.orderInfoLabel}>תאריך יציאה</Text>
+            <Text style={styles.orderInfoValue}>{order.departureDate}</Text>
+          </View>
+        </View>
+
+        {/* Payment Info */}
+        <View style={styles.orderPaymentSection}>
+          <View style={styles.orderPaymentRow}>
+            <View style={styles.orderPaymentItem}>
+              <Text style={styles.orderPaymentLabel}>סכום כולל</Text>
+              <Text style={styles.orderPaymentTotal}>₪{order.totalAmount.toLocaleString('he-IL')}</Text>
+            </View>
+            <View style={styles.orderPaymentItem}>
+              <Text style={styles.orderPaymentLabel}>שולם</Text>
+              <Text style={styles.orderPaymentPaid}>₪{order.paidAmount.toLocaleString('he-IL')}</Text>
+            </View>
+            {remainingAmount > 0 && (
+              <View style={styles.orderPaymentItem}>
+                <Text style={styles.orderPaymentLabel}>נותר</Text>
+                <Text style={styles.orderPaymentRemaining}>₪{remainingAmount.toLocaleString('he-IL')}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Payment Method */}
+        <View style={styles.orderInfoRow}>
+          <View style={styles.orderInfoContent}>
+            <Text style={styles.orderInfoLabel}>אופן תשלום</Text>
+            <Text style={styles.orderInfoValue}>{order.paymentMethod || 'לא צוין'}</Text>
+          </View>
+        </View>
+
+        {/* Special Requests */}
+        {order.specialRequests ? (
+          <View style={styles.orderSpecialSection}>
+            <View style={styles.orderSpecialContent}>
+              <Text style={styles.orderSpecialLabel}>בקשות מיוחדות</Text>
+              <Text style={styles.orderSpecialText}>{order.specialRequests}</Text>
+            </View>
+          </View>
+        ) : null}
+
+        {/* Internal Notes */}
+        {order.internalNotes ? (
+          <View style={styles.orderNotesSection}>
+            <View style={styles.orderNotesContent}>
+              <Text style={styles.orderNotesLabel}>הערות פנימיות</Text>
+              <Text style={styles.orderNotesText}>{order.internalNotes}</Text>
+            </View>
+          </View>
+        ) : null}
+      </View>
+
+      {/* Progress Bar */}
+      <View style={styles.progressWrapEnhanced}>
+        <View style={styles.progressHeaderEnhanced}>
+          <Text style={styles.progressLabelEnhanced}>התקדמות תשלום</Text>
+          <Text style={styles.progressValueEnhanced}>{paidPercent}%</Text>
+        </View>
+        <View style={styles.progressBarEnhanced}>
           <View
             style={[
-              styles.progressFill,
-              { width: `${paidPercent}%` },
+              styles.progressFillEnhanced,
+              { width: `${paidPercent}%`, backgroundColor: paidPercent === 100 ? '#10b981' : paidPercent >= 50 ? '#3b82f6' : '#f59e0b' },
             ]}
           />
         </View>
+        <View style={styles.progressFooter}>
+          <Text style={styles.progressFooterText}>
+            ₪{order.paidAmount.toLocaleString('he-IL')} מתוך ₪{order.totalAmount.toLocaleString('he-IL')}
+          </Text>
+        </View>
       </View>
-      <View style={styles.editActions}>
-        <OutlineButton label="עריכת הזמנה" onPress={() => onEdit(order.id)} />
+
+      {/* Edit Button */}
+      <View style={styles.editActionsEnhanced}>
+        <Pressable
+          style={styles.editButtonEnhanced}
+          onPress={() => onEdit(order.id)}
+        >
+          <Text style={styles.editButtonText}>עריכת הזמנה</Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -3312,6 +3431,88 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     color: '#0f172a',
   },
+  // Enhanced Summary Card Styles
+  summaryCardEnhanced: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 20,
+    marginTop: 20,
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+    shadowColor: '#3b82f6',
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    marginBottom: 8,
+  },
+  summaryCardHeader: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    marginBottom: 16,
+    gap: 10,
+  },
+  summaryTitleEnhanced: {
+    fontSize: 20,
+    fontWeight: '800',
+    textAlign: 'right',
+    color: '#0f172a',
+  },
+  summaryStatsRow: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  summaryStatItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  summaryStatValue: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  summaryStatLabel: {
+    fontSize: 13,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  summaryStatDivider: {
+    width: 1,
+    height: 50,
+    backgroundColor: '#e2e8f0',
+  },
+  summaryNoteContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  summaryNoteEnhanced: {
+    fontSize: 12,
+    textAlign: 'right',
+    color: '#64748b',
+    fontStyle: 'italic',
+  },
+  // Orders Page Header
+  ordersPageHeader: {
+    marginBottom: 8,
+  },
+  ordersPageTitle: {
+    fontSize: 32,
+    fontWeight: '800',
+    textAlign: 'right',
+    color: '#0f172a',
+    marginBottom: 6,
+  },
+  ordersPageSubtitle: {
+    fontSize: 16,
+    textAlign: 'right',
+    color: '#64748b',
+    marginBottom: 4,
+  },
+  // Enhanced Order Card Styles
   card: {
     backgroundColor: '#fff',
     borderRadius: 12,
@@ -3327,6 +3528,282 @@ const styles = StyleSheet.create({
   orderCard: {
     borderColor: '#dbeafe',
     backgroundColor: '#f8fbff',
+  },
+  orderCardEnhanced: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 20,
+    marginTop: 16,
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    marginBottom: 4,
+  },
+  orderCardHeaderEnhanced: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 2,
+    borderBottomColor: '#f1f5f9',
+  },
+  orderCardHeaderLeft: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    flex: 1,
+    gap: 12,
+  },
+  unitIconContainer: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#eff6ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+  },
+  unitIcon: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#3b82f6',
+  },
+  orderCardTitleContainer: {
+    flex: 1,
+  },
+  orderCardUnitTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'right',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  orderCardId: {
+    fontSize: 13,
+    textAlign: 'right',
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  statusBadgeEnhanced: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 2,
+  },
+  statusBadgeTextEnhanced: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  orderInfoSection: {
+    gap: 16,
+  },
+  orderInfoRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+  },
+  orderInfoIcon: {
+    width: 60,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 8,
+  },
+  orderInfoIconText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textAlign: 'center',
+  },
+  orderInfoContent: {
+    flex: 1,
+  },
+  orderInfoLabel: {
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'right',
+    marginBottom: 4,
+    fontWeight: '600',
+  },
+  orderInfoValue: {
+    fontSize: 15,
+    color: '#0f172a',
+    textAlign: 'right',
+    fontWeight: '700',
+  },
+  orderPaymentSection: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 16,
+    padding: 16,
+    marginVertical: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  orderPaymentRow: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-around',
+    gap: 12,
+  },
+  orderPaymentItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  orderPaymentLabel: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 6,
+    fontWeight: '600',
+  },
+  orderPaymentTotal: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  orderPaymentPaid: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#10b981',
+  },
+  orderPaymentRemaining: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#f59e0b',
+  },
+  orderSpecialSection: {
+    flexDirection: 'row-reverse',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: '#fef3c7',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#fbbf24',
+  },
+  orderSpecialContent: {
+    flex: 1,
+  },
+  orderSpecialLabel: {
+    fontSize: 12,
+    color: '#92400e',
+    textAlign: 'right',
+    marginBottom: 4,
+    fontWeight: '700',
+  },
+  orderSpecialText: {
+    fontSize: 14,
+    color: '#78350f',
+    textAlign: 'right',
+    fontWeight: '600',
+  },
+  orderNotesSection: {
+    flexDirection: 'row-reverse',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: '#f0f9ff',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+  },
+  orderNotesContent: {
+    flex: 1,
+  },
+  orderNotesLabel: {
+    fontSize: 12,
+    color: '#0c4a6e',
+    textAlign: 'right',
+    marginBottom: 4,
+    fontWeight: '700',
+  },
+  orderNotesText: {
+    fontSize: 14,
+    color: '#075985',
+    textAlign: 'right',
+    fontWeight: '600',
+  },
+  progressWrapEnhanced: {
+    marginTop: 20,
+    paddingTop: 20,
+    borderTopWidth: 2,
+    borderTopColor: '#f1f5f9',
+  },
+  progressHeaderEnhanced: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  progressLabelEnhanced: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  progressValueEnhanced: {
+    color: '#2563eb',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  progressBarEnhanced: {
+    height: 12,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 999,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  progressFillEnhanced: {
+    height: '100%',
+    borderRadius: 999,
+  },
+  progressFooter: {
+    alignItems: 'center',
+  },
+  progressFooterText: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  editActionsEnhanced: {
+    marginTop: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+  },
+  editButtonEnhanced: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2563eb',
+    paddingVertical: 14,
+    borderRadius: 14,
+    gap: 8,
+    shadowColor: '#2563eb',
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  editButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  emptyOrdersState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 20,
+  },
+  emptyOrdersText: {
+    fontSize: 18,
+    color: '#64748b',
+    fontWeight: '600',
   },
   cardTitle: {
     fontSize: 18,
