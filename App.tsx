@@ -25,9 +25,13 @@ import {
 } from 'react-native-safe-area-context';
 import { API_BASE_URL } from './src/apiConfig';
 
-type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'exitInspections' | 'warehouse' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask';
+type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'exitInspections' | 'warehouse' | 'warehouseMenu' | 'warehouseOrders' | 'warehouseInventory' | 'warehouseInventoryDetail' | 'newWarehouse' | 'newWarehouseItem' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask' | 'reports' | 'chat' | 'attendance';
 type OrderStatus = 'חדש' | 'באישור' | 'שולם חלקית' | 'שולם' | 'בוטל';
-type InspectionStatus = 'צריך ביקורת' | 'בביצוע' | 'הושלם';
+type InspectionStatus =
+  | 'זמן הביקורות טרם הגיע'
+  | 'דורש ביקורת היום'
+  | 'זמן הביקורת עבר'
+  | 'הביקורת הושלמה';
 
 type Order = {
   id: string;
@@ -123,54 +127,77 @@ const paymentOptions = [
   'אחר',
 ];
 
+// Single source of truth for vacation units in the system (10 units only)
+const UNIT_NAMES = Array.from({ length: 10 }, (_, i) => `יחידה ${i + 1}`);
+
+function normalizeUnitName(raw?: string | null): string {
+  const s = (raw ?? '').toString().trim();
+  if (!s) return '';
+  if (UNIT_NAMES.includes(s)) return s;
+  const m = s.match(/(\d+)/);
+  if (m) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n >= 1 && n <= 10) return `יחידה ${n}`;
+  }
+  return '';
+}
+
+function unitIdFromName(name: string): string {
+  const m = name.match(/(\d+)/);
+  const n = m ? Number(m[1]) : NaN;
+  if (Number.isFinite(n) && n >= 1 && n <= 10) return `unit-${n}`;
+  return 'unit-1';
+}
+
+function normalizeMaintenanceUnitId(raw?: string | null): string {
+  const s = (raw ?? '').toString().trim();
+  if (!s) return 'unit-1';
+  if (/^unit-\d+$/.test(s)) {
+    const n = Number(s.split('-')[1]);
+    if (Number.isFinite(n) && n >= 1 && n <= 10) return `unit-${n}`;
+  }
+  const m = s.match(/(\d+)/);
+  if (m) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n >= 1 && n <= 10) return `unit-${n}`;
+  }
+  return 'unit-1';
+}
+
+function normalizeISODate(raw?: string | null): string {
+  const s = (raw ?? '').toString().trim();
+  if (!s) return '';
+  // Handles both "YYYY-MM-DD" and ISO timestamps
+  return s.length >= 10 ? s.slice(0, 10) : s;
+}
+
+function todayLocalISODate(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function computeInspectionStatus(mission: Pick<InspectionMission, 'departureDate' | 'tasks'>): InspectionStatus {
+  const total = (mission.tasks || []).length;
+  const done = (mission.tasks || []).filter(t => t.completed).length;
+  if (total > 0 && done === total) return 'הביקורת הושלמה';
+
+  const dep = normalizeISODate(mission.departureDate);
+  const today = todayLocalISODate();
+  if (!dep) return 'זמן הביקורות טרם הגיע';
+  if (dep > today) return 'זמן הביקורות טרם הגיע';
+  if (dep === today) return 'דורש ביקורת היום';
+  return 'זמן הביקורת עבר';
+}
+
 const seaBackground = {
   uri: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1400&q=80',
 };
 
-const initialOrders: Order[] = [
-  {
-    id: 'ORD-001',
-    guestName: 'נועם כהן',
-    unitNumber: 'יחידה 3',
-    arrivalDate: '2025-12-20',
-    departureDate: '2025-12-23',
-    status: 'באישור',
-    guestsCount: 4,
-    specialRequests: 'בקשה ללול תינוק',
-    internalNotes: 'לוודא ניקיון יסודי לפני ההגעה',
-    paidAmount: 1200,
-    totalAmount: 2200,
-    paymentMethod: 'אשראי',
-  },
-  {
-    id: 'ORD-002',
-    guestName: 'שירה לוי',
-    unitNumber: 'יחידה 1',
-    arrivalDate: '2025-12-18',
-    departureDate: '2025-12-19',
-    status: 'שולם חלקית',
-    guestsCount: 2,
-    specialRequests: 'הגעה מאוחרת',
-    internalNotes: 'לסמן ביקורת יציאה',
-    paidAmount: 700,
-    totalAmount: 1200,
-    paymentMethod: 'מזומן',
-  },
-  {
-    id: 'ORD-003',
-    guestName: 'אורי ישראלי',
-    unitNumber: 'קוטג׳ 2',
-    arrivalDate: '2025-12-25',
-    departureDate: '2025-12-28',
-    status: 'חדש',
-    guestsCount: 3,
-    specialRequests: '',
-    internalNotes: 'להציע שדרוג ארוחת בוקר',
-    paidAmount: 0,
-    totalAmount: 1600,
-    paymentMethod: 'טרם נקבע',
-  },
-];
+// Orders are loaded from the backend; keep initial empty to avoid fake data.
+const initialOrders: Order[] = [];
 
 const initialInventoryItems: InventoryItem[] = [
   { id: 'INV-001', name: 'מצעים יחידים', category: 'מצעים', unit: 'סט', currentStock: 45, minStock: 30 },
@@ -216,82 +243,12 @@ const initialInventoryOrders: InventoryOrder[] = [
   },
 ];
 
-const initialMaintenanceUnits: MaintenanceUnit[] = [
-  {
-    id: 'unit-1',
-    name: 'יחידה 1',
-    type: 'יחידה',
-    tasks: [
-      {
-        id: 'task-1',
-        unitId: 'unit-1',
-        title: 'תיקון מזגן',
-        description: 'המזגן ביחידה לא עובד, צריך לבדוק ולתקן',
-        status: 'פתוח',
-        priority: 'גבוה',
-        createdDate: '2024-01-15',
-        category: 'מזגן',
-      },
-      {
-        id: 'task-2',
-        unitId: 'unit-1',
-        title: 'צביעת קירות',
-        description: 'צריך לצבוע את הקירות בחדר השינה',
-        status: 'בטיפול',
-        priority: 'בינוני',
-        createdDate: '2024-01-10',
-        assignedTo: 'יוסי כהן',
-        category: 'צבע',
-      },
-    ],
-  },
-  {
-    id: 'unit-2',
-    name: 'יחידה 2',
-    type: 'יחידה',
-    tasks: [
-      {
-        id: 'task-3',
-        unitId: 'unit-2',
-        title: 'תיקון דלת',
-        description: 'הדלת הראשית לא נסגרת כמו שצריך',
-        status: 'פתוח',
-        priority: 'בינוני',
-        createdDate: '2024-01-20',
-        category: 'תיקון',
-      },
-    ],
-  },
-  {
-    id: 'unit-3',
-    name: 'יחידה 3',
-    type: 'יחידה',
-    tasks: [],
-  },
-  {
-    id: 'cottage-1',
-    name: 'קוטג׳ 1',
-    type: 'קוטג׳',
-    tasks: [
-      {
-        id: 'task-4',
-        unitId: 'cottage-1',
-        title: 'תחזוקה שוטפת',
-        description: 'תחזוקה שוטפת חודשית - בדיקת כל המערכות',
-        status: 'פתוח',
-        priority: 'נמוך',
-        createdDate: '2024-02-01',
-        category: 'תחזוקה שוטפת',
-      },
-    ],
-  },
-  {
-    id: 'cottage-2',
-    name: 'קוטג׳ 2',
-    type: 'קוטג׳',
-    tasks: [],
-  },
-];
+const initialMaintenanceUnits: MaintenanceUnit[] = UNIT_NAMES.map(name => ({
+  id: unitIdFromName(name),
+  name,
+  type: 'יחידה',
+  tasks: [],
+}));
 
 function App() {
   return (
@@ -314,12 +271,31 @@ function AppContent() {
   const [inspectionMissions, setInspectionMissions] = useState<InspectionMission[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>(initialInventoryItems);
   const [inventoryOrders, setInventoryOrders] = useState<InventoryOrder[]>(initialInventoryOrders);
+  const [warehouses, setWarehouses] = useState<Array<{id: string; name: string; location?: string}>>([]);
+  const [warehouseItems, setWarehouseItems] = useState<Array<{id: string; warehouse_id: string; item_id: string; item_name: string; quantity: number; unit: string}>>([]);
+  const [allWarehouseItems, setAllWarehouseItems] = useState<Array<{id: string; warehouse_id: string; item_id: string; item_name: string; quantity: number; unit: string}>>([]);
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null);
   const [selectedUnit, setSelectedUnit] = useState<string>('כל המתחמים');
   const [maintenanceUnits, setMaintenanceUnits] = useState<MaintenanceUnit[]>(initialMaintenanceUnits);
   const [selectedMaintenanceUnitId, setSelectedMaintenanceUnitId] = useState<string | null>(null);
   const [selectedMaintenanceTaskId, setSelectedMaintenanceTaskId] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<Array<{id: number; sender: string; content: string; created_at: string}>>([]);
+  const [attendanceStatus, setAttendanceStatus] = useState<{is_clocked_in: boolean; session: any} | null>(null);
+  const [attendanceLogsReport, setAttendanceLogsReport] = useState<any[]>([]);
+  const [reportsSummary, setReportsSummary] = useState<{totalRevenue: number; totalPaid: number; totalExpenses: number} | null>(null);
+  const [reportsSummaryError, setReportsSummaryError] = useState<string | null>(null);
+  const [maintenanceTasksReport, setMaintenanceTasksReport] = useState<any[]>([]);
   const statusBarStyle = screen === 'home' ? 'light-content' : 'dark-content';
   const statusBar = <StatusBar barStyle={statusBarStyle} />;
+
+  const inspectionMissionsEffective = useMemo(() => {
+    return (inspectionMissions || []).map(m => ({
+      ...m,
+      status: computeInspectionStatus(m),
+      unitNumber: normalizeUnitName(m.unitNumber) || m.unitNumber,
+      departureDate: normalizeISODate(m.departureDate),
+    }));
+  }, [inspectionMissions]);
 
   const totals = useMemo(() => {
     const totalPaid = orders.reduce((sum, o) => sum + o.paidAmount, 0);
@@ -338,28 +314,496 @@ function AppContent() {
   ], []);
 
   useEffect(() => {
-    const newMissions: InspectionMission[] = [];
-    orders
-      .filter(order => order.status !== 'בוטל')
-      .forEach(order => {
-        const existing = inspectionMissions.find(m => m.orderId === order.id);
-        if (!existing) {
-          newMissions.push({
-            id: `INSP-${order.id}`,
-            orderId: order.id,
-            unitNumber: order.unitNumber,
-            guestName: order.guestName,
-            departureDate: order.departureDate,
-            status: 'צריך ביקורת' as InspectionStatus,
-            tasks: defaultInspectionTasks.map(t => ({ ...t })),
+    // Reconcile missions from orders:
+    // - exactly 1 mission per (non-cancelled) order
+    // - preserve task completion from previous state
+    // - drop missions that don't match any current order (removes fake/mocked ones)
+    setInspectionMissions(prev => {
+      const prevByOrderId = new Map<string, InspectionMission>();
+      (prev || []).forEach(m => prevByOrderId.set(m.orderId, m));
+
+      const next: InspectionMission[] = [];
+      (orders || [])
+        .filter(o => o.status !== 'בוטל')
+        .forEach(o => {
+          const existing = prevByOrderId.get(o.id);
+          const tasks =
+            existing?.tasks?.length
+              ? existing.tasks
+              : defaultInspectionTasks.map(t => ({ ...t }));
+          next.push({
+            id: existing?.id || `INSP-${o.id}`,
+            orderId: o.id,
+            unitNumber: o.unitNumber,
+            guestName: o.guestName,
+            departureDate: o.departureDate,
+            tasks,
+            status: computeInspectionStatus({ departureDate: o.departureDate, tasks }),
           });
-        }
-      });
-    
-    if (newMissions.length > 0) {
-      setInspectionMissions(prev => [...prev, ...newMissions]);
-    }
+        });
+
+      return next;
+    });
   }, [orders, defaultInspectionTasks]);
+
+  const loadChatMessages = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/chat/messages`);
+      if (!res.ok) {
+        console.warn('Failed to load chat messages', res.status);
+        return;
+      }
+      const data = await res.json();
+      // Reverse to show oldest first (backend returns newest first)
+      setChatMessages((data ?? []).reverse());
+    } catch (err) {
+      console.warn('Error loading chat messages', err);
+    }
+  };
+
+  const sendChatMessage = async (content: string) => {
+    if (!content.trim() || !userName) return;
+    
+    try {
+      const url = `${API_BASE_URL}/chat/messages`;
+      console.log('Sending chat message:', { url, sender: userName, content: content.trim() });
+      
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        body: JSON.stringify({
+          sender: userName,
+          content: content.trim(),
+        }),
+      });
+      
+      console.log('Chat message response:', res.status, res.statusText);
+      
+      if (!res.ok) {
+        let errorMsg = `שגיאה ${res.status}`;
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.detail || errorData.message || errorMsg;
+        } catch {
+          const errorText = await res.text();
+          errorMsg = errorText || errorMsg;
+        }
+        console.error('Failed to send chat message:', res.status, errorMsg);
+        Alert.alert('שגיאה', `נכשל בשליחת ההודעה: ${errorMsg}`);
+        return;
+      }
+      
+      const responseData = await res.json().catch(() => null);
+      console.log('Chat message sent successfully:', responseData);
+      await loadChatMessages();
+    } catch (err: any) {
+      console.error('Error sending chat message:', err);
+      const errorMsg = err.message || 'אירעה שגיאה בשליחת ההודעה';
+      Alert.alert('שגיאה', errorMsg);
+    }
+  };
+
+  useEffect(() => {
+    if (screen === 'chat') {
+      loadChatMessages();
+      // Refresh messages every 5 seconds
+      const interval = setInterval(loadChatMessages, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [screen]);
+
+  const loadAttendanceStatus = async () => {
+    if (!userName) return;
+    try {
+      const url = `${API_BASE_URL}/attendance/status/${encodeURIComponent(userName)}`;
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAttendanceStatus(data);
+      }
+    } catch (err) {
+      console.error('Error loading attendance status:', err);
+    }
+  };
+
+  const startAttendance = async () => {
+    if (!userName) {
+      Alert.alert('שגיאה', 'אנא התחברו תחילה');
+      return;
+    }
+    try {
+      const url = `${API_BASE_URL}/attendance/start`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employee: userName }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+        Alert.alert('שגיאה', errorData.detail || 'לא ניתן להתחיל את שעון הנוכחות');
+        return;
+      }
+      await loadAttendanceStatus();
+      Alert.alert('הצלחה', 'התחלת עבודה נרשמה בהצלחה');
+    } catch (err: any) {
+      Alert.alert('שגיאה', err.message || 'אירעה שגיאה בהתחלת העבודה');
+    }
+  };
+
+  const stopAttendance = async () => {
+    if (!userName) {
+      Alert.alert('שגיאה', 'אנא התחברו תחילה');
+      return;
+    }
+    try {
+      const url = `${API_BASE_URL}/attendance/stop`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employee: userName }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+        Alert.alert('שגיאה', errorData.detail || 'לא ניתן לסיים את שעון הנוכחות');
+        return;
+      }
+      await loadAttendanceStatus();
+      Alert.alert('הצלחה', 'סיום עבודה נרשם בהצלחה');
+    } catch (err: any) {
+      Alert.alert('שגיאה', err.message || 'אירעה שגיאה בסיום העבודה');
+    }
+  };
+
+  useEffect(() => {
+    if (screen === 'attendance' && userName) {
+      loadAttendanceStatus();
+      // Refresh status every 10 seconds
+      const interval = setInterval(loadAttendanceStatus, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [screen, userName]);
+
+  const loadWarehouses = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/warehouses`);
+      if (res.ok) {
+        const data = await res.json();
+        setWarehouses(data || []);
+      }
+    } catch (err) {
+      console.error('Error loading warehouses:', err);
+    }
+  };
+
+  const loadWarehouseItems = async (warehouseId: string) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/warehouses/${warehouseId}/items`);
+      if (res.ok) {
+        const data = await res.json();
+        setWarehouseItems(data || []);
+      }
+    } catch (err) {
+      console.error('Error loading warehouse items:', err);
+    }
+  };
+
+  const loadAllWarehouseItemsForReports = async () => {
+    try {
+      const warehousesRes = await fetch(`${API_BASE_URL}/warehouses`);
+      if (!warehousesRes.ok) return;
+      const ws = (await warehousesRes.json()) || [];
+      setWarehouses(ws);
+
+      const lists = await Promise.all(
+        (ws as Array<{ id: string }>).map(async w => {
+          try {
+            const itemsRes = await fetch(`${API_BASE_URL}/warehouses/${w.id}/items`);
+            if (!itemsRes.ok) return [];
+            return (await itemsRes.json()) || [];
+          } catch {
+            return [];
+          }
+        }),
+      );
+      setAllWarehouseItems(lists.flat());
+    } catch (err) {
+      console.error('Error loading all warehouse items for reports:', err);
+    }
+  };
+
+  const loadReportsSummary = async () => {
+    try {
+      setReportsSummaryError(null);
+      const res = await fetch(`${API_BASE_URL}/reports/summary`);
+      if (!res.ok) {
+        const text = await res.text();
+        setReportsSummary(null);
+        setReportsSummaryError(text || `שגיאה ${res.status}`);
+        return;
+      }
+      const data = await res.json();
+      setReportsSummary(data || null);
+    } catch (err: any) {
+      setReportsSummary(null);
+      setReportsSummaryError(err?.message || 'שגיאה בטעינת דוחות');
+    }
+  };
+
+  const loadAttendanceLogsReport = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/attendance/logs`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setAttendanceLogsReport(data || []);
+    } catch (err) {
+      console.error('Error loading attendance logs for reports:', err);
+    }
+  };
+
+  const loadMaintenanceTasksReport = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/maintenance/tasks`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setMaintenanceTasksReport(data || []);
+    } catch (err) {
+      console.error('Error loading maintenance tasks for reports:', err);
+    }
+  };
+
+  const loadMaintenanceUnits = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/maintenance/tasks`);
+      if (!res.ok) return;
+      const data = (await res.json()) || [];
+
+      // Keep the 10 units always visible, and attach tasks by unit_id
+      const baseUnits: MaintenanceUnit[] = UNIT_NAMES.map(name => ({
+        id: unitIdFromName(name),
+        name,
+        type: 'יחידה',
+        tasks: [],
+      }));
+
+      const byId = new Map<string, MaintenanceUnit>();
+      baseUnits.forEach(u => byId.set(u.id, u));
+
+      (data || []).forEach((t: any) => {
+        const unitId = normalizeMaintenanceUnitId(t.unit_id || t.unitId || t.unit);
+        const unit = byId.get(unitId) || byId.get('unit-1');
+        if (!unit) return;
+
+        const task: MaintenanceTask = {
+          id: (t.id || `task-${Date.now()}`).toString(),
+          unitId,
+          title: (t.title || '').toString(),
+          description: (t.description || '').toString(),
+          status: (t.status || 'פתוח') as MaintenanceStatus,
+          priority: (t.priority || 'בינוני') as MaintenancePriority,
+          createdDate: (t.created_date || t.createdDate || new Date().toISOString().split('T')[0]).toString(),
+          assignedTo: (t.assigned_to || t.assignedTo || undefined)?.toString(),
+          imageUri: (t.image_uri || t.imageUri || undefined)?.toString(),
+          category: (t.category || 'אחר').toString(),
+        };
+
+        unit.tasks.push(task);
+      });
+
+      // Sort tasks newest first per unit
+      baseUnits.forEach(u => {
+        u.tasks.sort((a, b) => (b.createdDate || '').localeCompare(a.createdDate || ''));
+      });
+
+      setMaintenanceUnits(baseUnits);
+      setMaintenanceTasksReport(data || []);
+    } catch (err) {
+      console.error('Error loading maintenance units:', err);
+    }
+  };
+
+  const loadOrders = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/orders`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = (data || []).map((o: any): Order => ({
+        id: o.id,
+        guestName: o.guest_name ?? o.guestName ?? '',
+        unitNumber: normalizeUnitName(o.unit_number ?? o.unitNumber ?? ''),
+        arrivalDate: o.arrival_date ?? o.arrivalDate ?? '',
+        departureDate: o.departure_date ?? o.departureDate ?? '',
+        status: (o.status ?? 'חדש') as OrderStatus,
+        guestsCount: Number(o.guests_count ?? o.guestsCount ?? 0),
+        specialRequests: o.special_requests ?? o.specialRequests ?? '',
+        internalNotes: o.internal_notes ?? o.internalNotes ?? '',
+        paidAmount: Number(o.paid_amount ?? o.paidAmount ?? 0),
+        totalAmount: Number(o.total_amount ?? o.totalAmount ?? 0),
+        paymentMethod: o.payment_method ?? o.paymentMethod ?? 'לא צוין',
+      }));
+      setOrders(list);
+    } catch (err) {
+      console.error('Error loading orders:', err);
+    }
+  };
+
+  const loadInventoryOrders = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/inventory/orders`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = (data || []).map((o: any): InventoryOrder => {
+        const status = (o.status ?? 'ממתין לאישור') as InventoryOrder['status'];
+        const orderType = (o.order_type ?? o.orderType ?? 'הזמנה כללית') as InventoryOrder['orderType'];
+        return {
+          id: o.id,
+          itemId: o.item_id ?? o.itemId ?? '',
+          itemName: o.item_name ?? o.itemName ?? '',
+          quantity: Number(o.quantity ?? 0),
+          unit: o.unit ?? '',
+          orderDate: o.order_date ?? o.orderDate ?? '',
+          deliveryDate: o.delivery_date ?? o.deliveryDate ?? undefined,
+          status,
+          orderType,
+          orderedBy: o.ordered_by ?? o.orderedBy ?? undefined,
+          unitNumber: normalizeUnitName(o.unit_number ?? o.unitNumber ?? '') || undefined,
+        };
+      });
+      setInventoryOrders(list);
+    } catch (err) {
+      console.error('Error loading inventory orders:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (screen === 'reports') {
+      loadOrders();
+      loadInventoryOrders();
+      loadReportsSummary();
+      loadAllWarehouseItemsForReports();
+      loadMaintenanceTasksReport();
+      loadAttendanceLogsReport();
+      if (userName) loadAttendanceStatus();
+    }
+  }, [screen, userName]);
+
+  useEffect(() => {
+    if (screen === 'hub' || screen === 'orders') {
+      loadOrders();
+    }
+    if (screen === 'exitInspections') {
+      loadOrders();
+    }
+    if (screen === 'warehouseOrders') {
+      loadInventoryOrders();
+    }
+    if (screen === 'maintenance' || screen === 'maintenanceTasks' || screen === 'maintenanceTaskDetail') {
+      loadMaintenanceUnits();
+    }
+  }, [screen]);
+
+  const createWarehouse = async (name: string, location?: string) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/warehouses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, location }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await loadWarehouses();
+        return data;
+      } else {
+        const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+        throw new Error(errorData.detail || 'לא ניתן ליצור מחסן');
+      }
+    } catch (err: any) {
+      Alert.alert('שגיאה', err.message || 'אירעה שגיאה ביצירת המחסן');
+      throw err;
+    }
+  };
+
+  const createWarehouseItem = async (warehouseId: string, itemId: string, itemName: string, quantity: number, unit: string) => {
+    try {
+      const payload: any = { 
+        item_name: itemName, 
+        quantity, 
+        unit 
+      };
+      // Only include item_id if it's provided and not empty
+      if (itemId && itemId.trim()) {
+        payload.item_id = itemId;
+      }
+      
+      console.log('Creating warehouse item:', { warehouseId, payload });
+      const res = await fetch(`${API_BASE_URL}/warehouses/${warehouseId}/items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      
+      console.log('Response status:', res.status, res.statusText);
+      
+      if (res.ok) {
+        const data = await res.json();
+        console.log('Warehouse item created successfully:', data);
+        await loadWarehouseItems(warehouseId);
+        return data;
+      } else {
+        const errorText = await res.text();
+        console.error('Error response:', errorText);
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch {
+          errorData = { detail: errorText || 'שגיאה לא ידועה' };
+        }
+        const errorMsg = errorData.detail || errorData.message || 'לא ניתן להוסיף מוצר';
+        throw new Error(errorMsg);
+      }
+    } catch (err: any) {
+      console.error('Error creating warehouse item:', err);
+      const errorMsg = err.message || 'אירעה שגיאה בהוספת המוצר';
+      Alert.alert('שגיאה', errorMsg);
+      throw err;
+    }
+  };
+
+  const updateWarehouseItem = async (warehouseId: string, itemId: string, quantity: number) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/warehouses/${warehouseId}/items/${itemId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quantity }),
+      });
+      if (res.ok) {
+        await loadWarehouseItems(warehouseId);
+        return true;
+      } else {
+        const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+        throw new Error(errorData.detail || 'לא ניתן לעדכן את הכמות');
+      }
+    } catch (err: any) {
+      Alert.alert('שגיאה', err.message || 'אירעה שגיאה בעדכון הכמות');
+      throw err;
+    }
+  };
+
+  useEffect(() => {
+    if (screen === 'warehouseInventory' || screen === 'warehouseMenu') {
+      loadWarehouses();
+    }
+  }, [screen]);
+
+  useEffect(() => {
+    if (screen === 'warehouseInventoryDetail' && selectedWarehouseId) {
+      loadWarehouseItems(selectedWarehouseId);
+    }
+  }, [screen, selectedWarehouseId]);
 
   const handleSign = async (mode: 'signin' | 'signup') => {
     if (!name.trim() || !password.trim()) {
@@ -431,6 +875,64 @@ function AppContent() {
     setOrders(prev =>
       prev.map(o => (o.id === id ? { ...o, ...changes } : o)),
     );
+  };
+
+  const createOrder = async () => {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      
+      const newOrderData = {
+        guest_name: '',
+        unit_number: '',
+        arrival_date: today,
+        departure_date: nextWeek,
+        status: 'חדש',
+        guests_count: 0,
+        special_requests: '',
+        internal_notes: '',
+        paid_amount: 0,
+        total_amount: 0,
+        payment_method: null,
+      };
+
+      const res = await fetch(`${API_BASE_URL}/orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newOrderData),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+        Alert.alert('שגיאה', errorData.detail || 'לא ניתן ליצור הזמנה');
+        return;
+      }
+
+      const createdOrder = await res.json();
+      
+      // Map backend order to frontend order format
+      const mappedOrder: Order = {
+        id: createdOrder.id,
+        guestName: createdOrder.guest_name || '',
+        unitNumber: createdOrder.unit_number || '',
+        arrivalDate: createdOrder.arrival_date || today,
+        departureDate: createdOrder.departure_date || nextWeek,
+        status: createdOrder.status || 'חדש',
+        guestsCount: createdOrder.guests_count || 0,
+        specialRequests: createdOrder.special_requests || '',
+        internalNotes: createdOrder.internal_notes || '',
+        paidAmount: createdOrder.paid_amount || 0,
+        totalAmount: createdOrder.total_amount || 0,
+        paymentMethod: createdOrder.payment_method || undefined,
+      };
+
+      setOrders(prev => [...prev, mappedOrder]);
+      setSelectedOrderId(mappedOrder.id);
+      setScreen('orderEdit');
+    } catch (err: any) {
+      console.error('Error creating order:', err);
+      Alert.alert('שגיאה', err.message || 'אירעה שגיאה ביצירת ההזמנה');
+    }
   };
 
   if (screen === 'home') {
@@ -728,6 +1230,17 @@ function AppContent() {
               onPress={() => setScreen('maintenance')}
             />
             <OptionCard
+              title="דוחות"
+              icon="דוח"
+              accent="#6366f1"
+              details={[
+                'דוח הזמנות, ביקורות, מחסן, תחזוקה ונוכחות',
+                'הכנסות/שולם/הוצאות מהשרת',
+              ]}
+              cta="פתח דוחות"
+              onPress={() => setScreen('reports')}
+            />
+            <OptionCard
               title="חשבוניות"
               icon="🧾"
               accent="#0ea5e9"
@@ -738,12 +1251,16 @@ function AppContent() {
               icon="💬"
               accent="#eab308"
               details={['תקשורת צוות והתראות']}
+              cta="פתח צ'אט"
+              onPress={() => setScreen('chat')}
             />
             <OptionCard
               title="שעון נוכחות"
               icon="⏱️"
               accent="#ec4899"
-              details={['נוכחות לפי שעה ועלות']}
+              details={['התחלה וסיום עבודה', 'מעקב שעות עבודה']}
+              cta="פתח שעון נוכחות"
+              onPress={() => setScreen('attendance')}
             />
           </View>
         </ScrollView>
@@ -757,14 +1274,50 @@ function AppContent() {
       setScreen('orders');
       return null;
     }
+    // Check if this is a new order (totalAmount and paidAmount are both 0)
+    const isNewOrder = currentOrder.totalAmount === 0 && currentOrder.paidAmount === 0;
     return (
       <OrderEditScreen
         order={currentOrder}
-        onSave={(id, changes) => {
-          setOrders(prev =>
-            prev.map(o => (o.id === id ? { ...o, ...changes } : o)),
-          );
-          setScreen('orders');
+        isNewOrder={isNewOrder}
+        onSave={async (id, changes) => {
+          try {
+            // Map frontend changes to backend format
+            const backendChanges: any = {
+              status: changes.status,
+              paid_amount: changes.paidAmount,
+              payment_method: changes.paymentMethod,
+              total_amount: changes.totalAmount,
+              guest_name: changes.guestName,
+              unit_number: changes.unitNumber,
+              arrival_date: changes.arrivalDate,
+              departure_date: changes.departureDate,
+              guests_count: changes.guestsCount,
+              special_requests: changes.specialRequests,
+              internal_notes: changes.internalNotes,
+            };
+
+            const res = await fetch(`${API_BASE_URL}/orders/${id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(backendChanges),
+            });
+
+            if (!res.ok) {
+              const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+              Alert.alert('שגיאה', errorData.detail || 'לא ניתן לעדכן את ההזמנה');
+              return;
+            }
+
+            // Update local state
+            setOrders(prev =>
+              prev.map(o => (o.id === id ? { ...o, ...changes } : o)),
+            );
+            setScreen('orders');
+          } catch (err: any) {
+            console.error('Error updating order:', err);
+            Alert.alert('שגיאה', err.message || 'אירעה שגיאה בעדכון ההזמנה');
+          }
         }}
         onCancel={() => setScreen('orders')}
       />
@@ -772,9 +1325,12 @@ function AppContent() {
   }
 
   if (screen === 'exitInspections') {
+    const missionsAll = [...inspectionMissionsEffective].sort((a, b) =>
+      (a.departureDate || '').localeCompare(b.departureDate || ''),
+    );
     return (
       <ExitInspectionsScreen
-        missions={inspectionMissions}
+        missions={missionsAll}
         onUpdateMission={(id, updates) => {
           setInspectionMissions(prev =>
             prev.map(m => (m.id === id ? { ...m, ...updates } : m)),
@@ -787,7 +1343,19 @@ function AppContent() {
     );
   }
 
-  if (screen === 'warehouse') {
+  if (screen === 'warehouse' || screen === 'warehouseMenu') {
+    return (
+      <WarehouseMenuScreen
+        onSelectOrders={() => setScreen('warehouseOrders')}
+        onSelectInventory={() => setScreen('warehouseInventory')}
+        onBack={() => setScreen('hub')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
+  if (screen === 'warehouseOrders') {
     return (
       <WarehouseScreen
         items={inventoryItems}
@@ -802,11 +1370,88 @@ function AppContent() {
             prev.map(o => (o.id === id ? { ...o, ...updates } : o)),
           );
         }}
-        onBack={() => setScreen('hub')}
+        onBack={() => setScreen('warehouseMenu')}
         onNewOrder={() => setScreen('newWarehouseOrder')}
         safeAreaInsets={safeAreaInsets}
         statusBar={statusBar}
         userName={userName || ''}
+      />
+    );
+  }
+
+  if (screen === 'warehouseInventory') {
+    return (
+      <WarehouseInventoryScreen
+        warehouses={warehouses || []}
+        onSelectWarehouse={(id) => {
+          setSelectedWarehouseId(id);
+          setScreen('warehouseInventoryDetail');
+        }}
+        onNewWarehouse={() => setScreen('newWarehouse')}
+        onRefresh={loadWarehouses}
+        onBack={() => setScreen('warehouseMenu')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
+  if (screen === 'newWarehouse') {
+    return (
+      <NewWarehouseScreen
+        onSave={async (name, location) => {
+          await createWarehouse(name, location);
+          setScreen('warehouseInventory');
+        }}
+        onCancel={() => setScreen('warehouseInventory')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
+  if (screen === 'warehouseInventoryDetail') {
+    const warehouse = warehouses.find(w => w.id === selectedWarehouseId);
+    return (
+      <WarehouseInventoryDetailScreen
+        warehouse={warehouse}
+        items={warehouseItems.filter(item => item.warehouse_id === selectedWarehouseId)}
+        allInventoryItems={inventoryItems}
+        onAddItem={() => setScreen('newWarehouseItem')}
+        onUpdateItem={updateWarehouseItem}
+        onRefresh={() => selectedWarehouseId && loadWarehouseItems(selectedWarehouseId)}
+        onBack={() => setScreen('warehouseInventory')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
+  if (screen === 'newWarehouseItem') {
+    const warehouse = warehouses.find(w => w.id === selectedWarehouseId);
+    return (
+      <NewWarehouseItemScreen
+        warehouse={warehouse}
+        availableItems={inventoryItems}
+        onSave={async (itemId, itemName, quantity, unit) => {
+          if (!selectedWarehouseId) {
+            Alert.alert('שגיאה', 'מחסן לא נבחר');
+            return;
+          }
+          try {
+            console.log('onSave called with:', { itemId, itemName, quantity, unit, selectedWarehouseId });
+            await createWarehouseItem(selectedWarehouseId, itemId || '', itemName, quantity, unit);
+            console.log('Item saved, navigating to detail screen');
+            setScreen('warehouseInventoryDetail');
+          } catch (err: any) {
+            console.error('Failed to save warehouse item in onSave:', err);
+            // Error already handled in createWarehouseItem, but don't navigate on error
+            throw err; // Re-throw so handleSave can catch it
+          }
+        }}
+        onCancel={() => setScreen('warehouseInventoryDetail')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
       />
     );
   }
@@ -817,9 +1462,9 @@ function AppContent() {
         items={inventoryItems}
         onSave={(order) => {
           setInventoryOrders(prev => [...prev, order]);
-          setScreen('warehouse');
+          setScreen('warehouseOrders');
         }}
-        onCancel={() => setScreen('warehouse')}
+        onCancel={() => setScreen('warehouseOrders')}
         safeAreaInsets={safeAreaInsets}
         statusBar={statusBar}
         userName={userName || ''}
@@ -863,6 +1508,69 @@ function AppContent() {
     );
   }
 
+  if (screen === 'chat') {
+    return (
+      <ChatScreen
+        messages={chatMessages}
+        userName={userName || ''}
+        onSendMessage={sendChatMessage}
+        onBack={() => setScreen('hub')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
+  if (screen === 'reports') {
+    return (
+      <ReportsScreen
+        orders={orders}
+        missions={inspectionMissionsEffective}
+        warehouses={warehouses}
+        allWarehouseItems={allWarehouseItems}
+        inventoryOrders={inventoryOrders}
+        maintenanceUnits={maintenanceUnits}
+        maintenanceTasksReport={maintenanceTasksReport}
+        attendanceStatus={attendanceStatus}
+        attendanceLogsReport={attendanceLogsReport}
+        reportsSummary={reportsSummary}
+        reportsSummaryError={reportsSummaryError}
+        onRefresh={() => {
+          loadOrders();
+          loadInventoryOrders();
+          loadReportsSummary();
+          loadAllWarehouseItemsForReports();
+          loadMaintenanceTasksReport();
+          loadAttendanceLogsReport();
+          if (userName) loadAttendanceStatus();
+        }}
+        onOpenOrders={() => setScreen('orders')}
+        onOpenExitInspections={() => setScreen('exitInspections')}
+        onOpenWarehouse={() => setScreen('warehouse')}
+        onOpenMaintenance={() => setScreen('maintenance')}
+        onOpenAttendance={() => setScreen('attendance')}
+        onBack={() => setScreen('hub')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
+  if (screen === 'attendance') {
+    return (
+      <AttendanceScreen
+        userName={userName || ''}
+        attendanceStatus={attendanceStatus}
+        onStart={startAttendance}
+        onStop={stopAttendance}
+        onRefresh={loadAttendanceStatus}
+        onBack={() => setScreen('hub')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
   if (screen === 'maintenanceTaskDetail') {
     const unit = maintenanceUnits.find(u => u.id === selectedMaintenanceUnitId);
     const task = unit?.tasks.find(t => t.id === selectedMaintenanceTaskId);
@@ -874,19 +1582,30 @@ function AppContent() {
       <MaintenanceTaskDetailScreen
         unit={unit}
         task={task}
-        onUpdateTask={(taskId, updates) => {
-          setMaintenanceUnits(prev =>
-            prev.map(u =>
-              u.id === unit.id
-                ? {
-                    ...u,
-                    tasks: u.tasks.map(t =>
-                      t.id === taskId ? { ...t, ...updates } : t,
-                    ),
-                  }
-                : u,
-            ),
-          );
+        onUpdateTask={async (taskId, updates) => {
+          try {
+            const payload: any = {};
+            if (updates.status) payload.status = updates.status;
+            if (updates.priority) payload.priority = updates.priority;
+            if (updates.assignedTo !== undefined) payload.assigned_to = updates.assignedTo;
+            if (updates.imageUri !== undefined) payload.image_uri = updates.imageUri;
+            if (updates.title) payload.title = updates.title;
+            if (updates.description) payload.description = updates.description;
+            if (updates.category) payload.category = updates.category;
+
+            const res = await fetch(`${API_BASE_URL}/maintenance/tasks/${encodeURIComponent(taskId)}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            if (!res.ok) {
+              const errText = await res.text().catch(() => '');
+              throw new Error(errText || `HTTP ${res.status}`);
+            }
+            await loadMaintenanceUnits();
+          } catch (err: any) {
+            Alert.alert('שגיאה', err.message || 'לא ניתן לעדכן משימת תחזוקה');
+          }
         }}
         onBack={() => setScreen('maintenanceTasks')}
         safeAreaInsets={safeAreaInsets}
@@ -904,13 +1623,34 @@ function AppContent() {
     return (
       <NewMaintenanceTaskScreen
         unit={unit}
-        onSave={(task) => {
-          setMaintenanceUnits(prev =>
-            prev.map(u =>
-              u.id === unit.id ? { ...u, tasks: [...u.tasks, task] } : u,
-            ),
-          );
-          setScreen('maintenanceTasks');
+        onSave={async (task) => {
+          try {
+            const payload = {
+              id: task.id,
+              unit_id: unit.id,
+              title: task.title,
+              description: task.description,
+              status: task.status,
+              priority: task.priority,
+              created_date: task.createdDate,
+              assigned_to: task.assignedTo || userName || null,
+              image_uri: task.imageUri || null,
+              category: task.category,
+            };
+            const res = await fetch(`${API_BASE_URL}/maintenance/tasks`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            if (!res.ok) {
+              const errText = await res.text().catch(() => '');
+              throw new Error(errText || `HTTP ${res.status}`);
+            }
+            await loadMaintenanceUnits();
+            setScreen('maintenanceTasks');
+          } catch (err: any) {
+            Alert.alert('שגיאה', err.message || 'לא ניתן ליצור משימת תחזוקה');
+          }
         }}
         onCancel={() => setScreen('maintenanceTasks')}
         safeAreaInsets={safeAreaInsets}
@@ -939,6 +1679,12 @@ function AppContent() {
           <Text style={styles.ordersPageSubtitle}>
             שלום {userName}, ניהול הזמנות, תשלומים וסטטוסים
           </Text>
+          <Pressable
+            onPress={createOrder}
+            style={[styles.addOrderButton, { marginTop: 16, alignSelf: 'flex-start' }]}
+          >
+            <Text style={styles.addOrderButtonText}>+ יצירת הזמנה חדשה</Text>
+          </Pressable>
         </View>
 
         <View style={styles.summaryCardEnhanced}>
@@ -1149,6 +1895,7 @@ function OrderCard({ order, onEdit }: OrderCardProps) {
 
 type OrderEditProps = {
   order: Order;
+  isNewOrder?: boolean; // Flag to indicate if this is a new order creation
   onSave: (
     id: string,
     changes: Partial<
@@ -1171,7 +1918,7 @@ type OrderEditProps = {
   onCancel: () => void;
 };
 
-function OrderEditScreen({ order, onSave, onCancel }: OrderEditProps) {
+function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel }: OrderEditProps) {
   const [status, setStatus] = useState<OrderStatus>(order.status);
   const [paid, setPaid] = useState(order.paidAmount.toString());
   const [method, setMethod] = useState(order.paymentMethod);
@@ -1188,6 +1935,7 @@ function OrderEditScreen({ order, onSave, onCancel }: OrderEditProps) {
   const [addPayment, setAddPayment] = useState('');
   const [statusOpen, setStatusOpen] = useState(false);
   const [methodOpen, setMethodOpen] = useState(false);
+  const [unitOpen, setUnitOpen] = useState(false);
   const [showAddPayment, setShowAddPayment] = useState(false);
 
   React.useEffect(() => {
@@ -1205,6 +1953,7 @@ function OrderEditScreen({ order, onSave, onCancel }: OrderEditProps) {
     setAddPayment('');
     setStatusOpen(false);
     setMethodOpen(false);
+    setUnitOpen(false);
   }, [order]);
 
   const paidNumber = Number(paid.replace(/,/g, '')) || 0;
@@ -1245,20 +1994,27 @@ function OrderEditScreen({ order, onSave, onCancel }: OrderEditProps) {
 
   const saveEdit = () => {
     if (!guestName.trim() || !unitNumber.trim()) {
-      Alert.alert('שגיאה', 'יש למלא שם אורח ומספר יחידה');
+      Alert.alert('שגיאה', 'יש למלא שם אורח ולבחור יחידת נופש');
+      return;
+    }
+    if (!UNIT_NAMES.includes(unitNumber.trim())) {
+      Alert.alert('שגיאה', 'יש לבחור יחידת נופש מתוך הרשימה (יחידה 1 עד יחידה 10)');
       return;
     }
     if (Number.isNaN(totalNumber) || totalNumber <= 0) {
       Alert.alert('שגיאה', 'סכום מלא חייב להיות חיובי');
       return;
     }
-    if (paidNumber < 0) {
+    // For new orders, set paidAmount to 0 (only total amount is set)
+    // For existing orders, use the paid amount from the field
+    const finalPaidAmount = isNewOrder ? 0 : paidNumber;
+    if (finalPaidAmount < 0) {
       Alert.alert('שגיאה', 'סכום ששולם חייב להיות חיובי');
       return;
     }
     onSave(order.id, {
       status,
-      paidAmount: paidNumber,
+      paidAmount: finalPaidAmount,
       paymentMethod: method || 'לא צוין',
       totalAmount: totalNumber,
       guestName: guestName.trim(),
@@ -1289,14 +2045,37 @@ function OrderEditScreen({ order, onSave, onCancel }: OrderEditProps) {
             textAlign="right"
           />
 
-          <Text style={styles.label}>מספר יחידה</Text>
-          <TextInput
-            style={styles.input}
-            value={unitNumber}
-            onChangeText={setUnitNumber}
-            placeholder="יחידה 1"
-            textAlign="right"
-          />
+          <Text style={styles.label}>יחידת נופש</Text>
+          <Pressable onPress={() => setUnitOpen(o => !o)} style={styles.select}>
+            <Text style={styles.selectValue}>{unitNumber || 'בחרו יחידה'}</Text>
+            <Text style={styles.selectCaret}>▾</Text>
+          </Pressable>
+          {unitOpen ? (
+            <View style={styles.selectList}>
+              {UNIT_NAMES.map(option => (
+                <Pressable
+                  key={option}
+                  style={[
+                    styles.selectItem,
+                    option === unitNumber && styles.selectItemActive,
+                  ]}
+                  onPress={() => {
+                    setUnitNumber(option);
+                    setUnitOpen(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.selectItemText,
+                      option === unitNumber && styles.selectItemTextActive,
+                    ]}
+                  >
+                    {option}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
 
           <View style={styles.fieldRow}>
             <View style={[styles.field, styles.fieldHalf]}>
@@ -1371,19 +2150,140 @@ function OrderEditScreen({ order, onSave, onCancel }: OrderEditProps) {
             </View>
           </View>
 
-          <View style={styles.fieldRow}>
-            <View style={[styles.field, styles.fieldHalf, { justifyContent: 'flex-end' }]}>
-              <Pressable
-                onPress={() => setShowAddPayment(true)}
-                style={({ pressed }) => [
-                  styles.addPaymentTrigger,
-                  pressed && { opacity: 0.9 },
-                ]}
-              >
-                <Text style={styles.addPaymentText}>הוסף / עדכון תשלום</Text>
-              </Pressable>
+          {/* For new orders: only show total amount */}
+          {isNewOrder ? (
+            <View style={styles.fieldRow}>
+              <View style={[styles.field, styles.fieldHalf]}>
+                <Text style={styles.label}>סכום מלא (₪)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={total}
+                  onChangeText={setTotal}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  textAlign="right"
+                />
+              </View>
+              <View style={[styles.field, styles.fieldHalf]}>
+                <Text style={styles.label}>אופן תשלום</Text>
+                <Pressable
+                  onPress={() => setMethodOpen(o => !o)}
+                  style={styles.select}
+                >
+                  <Text style={styles.selectValue}>{method || 'בחרו אופן תשלום'}</Text>
+                  <Text style={styles.selectCaret}>▾</Text>
+                </Pressable>
+                {methodOpen ? (
+                  <View style={styles.selectList}>
+                    {paymentOptions.map(option => (
+                      <Pressable
+                        key={option}
+                        style={[
+                          styles.selectItem,
+                          option === method && styles.selectItemActive,
+                        ]}
+                        onPress={() => {
+                          setMethod(option);
+                          setMethodOpen(false);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.selectItemText,
+                            option === method && styles.selectItemTextActive,
+                          ]}
+                        >
+                          {option}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
             </View>
-          </View>
+          ) : (
+            <>
+              {/* For existing orders: show both total and paid amounts */}
+              <View style={styles.fieldRow}>
+                <View style={[styles.field, styles.fieldHalf]}>
+                  <Text style={styles.label}>סכום מלא (₪)</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={total}
+                    onChangeText={setTotal}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    textAlign="right"
+                  />
+                </View>
+                <View style={[styles.field, styles.fieldHalf]}>
+                  <Text style={styles.label}>סכום ששולם (₪)</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={paid}
+                    onChangeText={setPaid}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    textAlign="right"
+                  />
+                </View>
+              </View>
+
+              <View style={styles.fieldRow}>
+                <View style={[styles.field, styles.fieldHalf]}>
+                  <Text style={styles.label}>אופן תשלום</Text>
+                  <Pressable
+                    onPress={() => setMethodOpen(o => !o)}
+                    style={styles.select}
+                  >
+                    <Text style={styles.selectValue}>{method || 'בחרו אופן תשלום'}</Text>
+                    <Text style={styles.selectCaret}>▾</Text>
+                  </Pressable>
+                  {methodOpen ? (
+                    <View style={styles.selectList}>
+                      {paymentOptions.map(option => (
+                        <Pressable
+                          key={option}
+                          style={[
+                            styles.selectItem,
+                            option === method && styles.selectItemActive,
+                          ]}
+                          onPress={() => {
+                            setMethod(option);
+                            setMethodOpen(false);
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.selectItemText,
+                              option === method && styles.selectItemTextActive,
+                            ]}
+                          >
+                            {option}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+
+              {/* Show payment addition button for existing orders */}
+              <View style={styles.fieldRow}>
+                <View style={[styles.field, styles.fieldHalf, { justifyContent: 'flex-end' }]}>
+                  <Pressable
+                    onPress={() => setShowAddPayment(true)}
+                    style={({ pressed }) => [
+                      styles.addPaymentTrigger,
+                      pressed && { opacity: 0.9 },
+                    ]}
+                  >
+                    <Text style={styles.addPaymentText}>הוסף / עדכון תשלום</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </>
+          )}
 
           <Text style={styles.label}>בקשות מיוחדות</Text>
           <TextInput
@@ -1469,27 +2369,32 @@ function OrderEditScreen({ order, onSave, onCancel }: OrderEditProps) {
               </View>
             ) : null}
 
-            <Text style={styles.label}>הוסף תשלום נוסף (₪)</Text>
-            <View style={styles.addPaymentRow}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                value={addPayment}
-                onChangeText={setAddPayment}
-                keyboardType="numeric"
-                placeholder="0"
-                textAlign="right"
-              />
-              <Pressable
-                onPress={addPaymentAmount}
-                style={({ pressed }) => [
-                  styles.addPaymentTrigger,
-                  { minWidth: 90, paddingVertical: 10 },
-                  pressed && { opacity: 0.9 },
-                ]}
-              >
-                <Text style={styles.addPaymentText}>הוסף</Text>
-              </Pressable>
-            </View>
+            {/* Only show "add additional payment" if order already has a total amount */}
+            {totalNumber > 0 && (
+              <>
+                <Text style={styles.label}>הוסף תשלום נוסף (₪)</Text>
+                <View style={styles.addPaymentRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    value={addPayment}
+                    onChangeText={setAddPayment}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    textAlign="right"
+                  />
+                  <Pressable
+                    onPress={addPaymentAmount}
+                    style={({ pressed }) => [
+                      styles.addPaymentTrigger,
+                      { minWidth: 90, paddingVertical: 10 },
+                      pressed && { opacity: 0.9 },
+                    ]}
+                  >
+                    <Text style={styles.addPaymentText}>הוסף</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
 
             <View style={styles.progressWrap}>
               <View style={styles.progressHeader}>
@@ -1578,18 +2483,10 @@ function ExitInspectionsScreen({
     const updatedTasks = mission.tasks.map(t =>
       t.id === taskId ? { ...t, completed: !t.completed } : t,
     );
-    
-    const completedCount = updatedTasks.filter(t => t.completed).length;
-    const newStatus: InspectionStatus =
-      completedCount === 0
-        ? 'צריך ביקורת'
-        : completedCount === updatedTasks.length
-          ? 'הושלם'
-          : 'בביצוע';
 
     onUpdateMission(missionId, {
       tasks: updatedTasks,
-      status: newStatus,
+      status: computeInspectionStatus({ departureDate: mission.departureDate, tasks: updatedTasks }),
     });
   };
 
@@ -1655,31 +2552,25 @@ function InspectionMissionCard({
   const progressPercent = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
 
   const getDisplayStatus = () => {
-    if (completedTasks === totalTasks && totalTasks > 0) {
-      return 'ביקורת הושלמה';
-    }
-    
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const departureDate = new Date(mission.departureDate);
-    departureDate.setHours(0, 0, 0, 0);
-    
-    if (departureDate > today) {
-      return 'מועד הביקורת טרם הגיע';
-    }
-    
-    return 'מחכה לביקורת';
+    return computeInspectionStatus(mission);
   };
 
   const getStatusColor = (statusText: string) => {
-    if (statusText === 'ביקורת הושלמה') {
+    if (statusText === 'הביקורת הושלמה') {
       return '#22c55e';
     }
-    if (statusText === 'מחכה לביקורת') {
+    if (statusText === 'דורש ביקורת היום') {
       return '#f59e0b';
     }
-    if (statusText === 'מועד הביקורת טרם הגיע') {
+    if (statusText === 'זמן הביקורת עבר') {
+      return '#ef4444';
+    }
+    if (statusText === 'זמן הביקורות טרם הגיע') {
       return '#64748b';
+    }
+    // fallback
+    if (statusText) {
+      return '#f59e0b';
     }
     return '#64748b';
   };
@@ -1806,6 +2697,52 @@ function OutlineButton({ label, onPress, style }: ButtonProps) {
   );
 }
 
+type WarehouseMenuScreenProps = {
+  onSelectOrders: () => void;
+  onSelectInventory: () => void;
+  onBack: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+};
+
+type WarehouseInventoryScreenProps = {
+  warehouses: Array<{id: string; name: string; location?: string}>;
+  onSelectWarehouse: (id: string) => void;
+  onNewWarehouse: () => void;
+  onRefresh: () => void;
+  onBack: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+};
+
+type WarehouseInventoryDetailScreenProps = {
+  warehouse: {id: string; name: string; location?: string} | undefined;
+  items: Array<{id: string; warehouse_id: string; item_id: string; item_name: string; quantity: number; unit: string}>;
+  allInventoryItems: InventoryItem[];
+  onAddItem: () => void;
+  onUpdateItem: (warehouseId: string, itemId: string, quantity: number) => Promise<void>;
+  onRefresh: () => void;
+  onBack: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+};
+
+type NewWarehouseScreenProps = {
+  onSave: (name: string, location?: string) => Promise<void>;
+  onCancel: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+};
+
+type NewWarehouseItemScreenProps = {
+  warehouse: {id: string; name: string; location?: string} | undefined;
+  availableItems: InventoryItem[];
+  onSave: (itemId: string, itemName: string, quantity: number, unit: string) => Promise<void>;
+  onCancel: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+};
+
 type WarehouseScreenProps = {
   items: InventoryItem[];
   orders: InventoryOrder[];
@@ -1828,6 +2765,461 @@ type NewWarehouseOrderScreenProps = {
   statusBar: React.ReactElement;
   userName: string;
 };
+
+function WarehouseMenuScreen({
+  onSelectOrders,
+  onSelectInventory,
+  onBack,
+  safeAreaInsets,
+  statusBar,
+}: WarehouseMenuScreenProps) {
+  return (
+    <SafeAreaView
+      style={[styles.container, { paddingTop: safeAreaInsets.top }]}
+    >
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable onPress={onBack} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+      </View>
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.warehouseHeader}>
+          <View>
+            <Text style={styles.title}>מחסן</Text>
+            <Text style={styles.subtitle}>
+              בחרו פעולה
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.warehouseMenuOptions}>
+          <Pressable
+            style={styles.warehouseMenuOption}
+            onPress={onSelectOrders}
+          >
+            <View style={styles.warehouseMenuOptionIcon}>
+              <Text style={styles.warehouseMenuOptionIconText}>📑</Text>
+            </View>
+            <View style={styles.warehouseMenuOptionContent}>
+              <Text style={styles.warehouseMenuOptionTitle}>הזמנות</Text>
+              <Text style={styles.warehouseMenuOptionSubtitle}>
+                הזמנות פנימיות למלאי וצפייה בסטטוס
+              </Text>
+            </View>
+            <Text style={styles.warehouseMenuOptionArrow}>›</Text>
+          </Pressable>
+
+          <Pressable
+            style={styles.warehouseMenuOption}
+            onPress={onSelectInventory}
+          >
+            <View style={styles.warehouseMenuOptionIcon}>
+              <Text style={styles.warehouseMenuOptionIconText}>📦</Text>
+            </View>
+            <View style={styles.warehouseMenuOptionContent}>
+              <Text style={styles.warehouseMenuOptionTitle}>מלאים</Text>
+              <Text style={styles.warehouseMenuOptionSubtitle}>
+                צפייה במלאי המחסנים
+              </Text>
+            </View>
+            <Text style={styles.warehouseMenuOptionArrow}>›</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function WarehouseInventoryScreen({
+  warehouses,
+  onSelectWarehouse,
+  onNewWarehouse,
+  onRefresh,
+  onBack,
+  safeAreaInsets,
+  statusBar,
+}: WarehouseInventoryScreenProps) {
+  return (
+    <SafeAreaView
+      style={[styles.container, { paddingTop: safeAreaInsets.top }]}
+    >
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable onPress={onBack} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+      </View>
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.warehouseHeader}>
+          <View>
+            <Text style={styles.title}>מלאים</Text>
+            <Text style={styles.subtitle}>
+              ניהול מלאי המחסנים
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.ordersHeaderRow}>
+          <Text style={styles.sectionTitle}>מחסנים</Text>
+          <Pressable
+            onPress={onNewWarehouse}
+            style={styles.addOrderButton}
+          >
+            <Text style={styles.addOrderButtonText}>+ מחסן חדש</Text>
+          </Pressable>
+        </View>
+
+        {(warehouses || []).length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>אין מחסנים כרגע</Text>
+            <Text style={styles.emptyStateSubtext}>
+              לחצו על "מחסן חדש" כדי להתחיל
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.warehouseList}>
+            {(warehouses || []).map(warehouse => (
+              <Pressable
+                key={warehouse.id}
+                style={styles.warehouseCard}
+                onPress={() => onSelectWarehouse(warehouse.id)}
+              >
+                <View style={styles.warehouseCardIcon}>
+                  <Text style={styles.warehouseCardIconText}>📦</Text>
+                </View>
+                <View style={styles.warehouseCardContent}>
+                  <Text style={styles.warehouseCardName}>{warehouse.name}</Text>
+                  {warehouse.location && (
+                    <Text style={styles.warehouseCardLocation}>{warehouse.location}</Text>
+                  )}
+                </View>
+                <Text style={styles.warehouseCardArrow}>›</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function WarehouseInventoryDetailScreen({
+  warehouse,
+  items,
+  allInventoryItems,
+  onAddItem,
+  onUpdateItem,
+  onRefresh,
+  onBack,
+  safeAreaInsets,
+  statusBar,
+}: WarehouseInventoryDetailScreenProps) {
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editQuantity, setEditQuantity] = useState<string>('');
+
+  const handleEditQuantity = (item: typeof items[0]) => {
+    setEditingItemId(item.id);
+    setEditQuantity(item.quantity.toString());
+  };
+
+  const handleSaveQuantity = async (item: typeof items[0]) => {
+    const quantity = parseInt(editQuantity);
+    if (isNaN(quantity) || quantity < 0) {
+      Alert.alert('שגיאה', 'אנא הזינו כמות תקינה');
+      return;
+    }
+    try {
+      await onUpdateItem(item.warehouse_id, item.id, quantity);
+      setEditingItemId(null);
+      setEditQuantity('');
+    } catch (err) {
+      // Error already handled in onUpdateItem
+    }
+  };
+
+  if (!warehouse) {
+    return null;
+  }
+
+  return (
+    <SafeAreaView
+      style={[styles.container, { paddingTop: safeAreaInsets.top }]}
+    >
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable onPress={onBack} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+      </View>
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.warehouseHeader}>
+          <View>
+            <Text style={styles.title}>{warehouse.name}</Text>
+            <Text style={styles.subtitle}>
+              {warehouse.location || 'מחסן'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.ordersHeaderRow}>
+          <Text style={styles.sectionTitle}>מוצרים במחסן</Text>
+          <Pressable
+            onPress={onAddItem}
+            style={styles.addOrderButton}
+          >
+            <Text style={styles.addOrderButtonText}>+ מוצר חדש</Text>
+          </Pressable>
+        </View>
+
+        {items.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>אין מוצרים במחסן זה</Text>
+            <Text style={styles.emptyStateSubtext}>
+              לחצו על "מוצר חדש" כדי להוסיף
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.warehouseItemsList}>
+            {items.map(item => (
+              <View key={item.id} style={styles.warehouseItemCard}>
+                <View style={styles.warehouseItemInfo}>
+                  <Text style={styles.warehouseItemName}>{item.item_name}</Text>
+                  <Text style={styles.warehouseItemUnit}>{item.unit}</Text>
+                </View>
+                {editingItemId === item.id ? (
+                  <View style={styles.warehouseItemEdit}>
+                    <TextInput
+                      style={styles.warehouseItemQuantityInput}
+                      value={editQuantity}
+                      onChangeText={setEditQuantity}
+                      keyboardType="numeric"
+                      placeholder="כמות"
+                    />
+                    <Pressable
+                      style={styles.warehouseItemSaveButton}
+                      onPress={() => handleSaveQuantity(item)}
+                    >
+                      <Text style={styles.warehouseItemSaveButtonText}>שמור</Text>
+                    </Pressable>
+                    <Pressable
+                      style={styles.warehouseItemCancelButton}
+                      onPress={() => {
+                        setEditingItemId(null);
+                        setEditQuantity('');
+                      }}
+                    >
+                      <Text style={styles.warehouseItemCancelButtonText}>ביטול</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <View style={styles.warehouseItemActions}>
+                    <Text style={styles.warehouseItemQuantity}>
+                      כמות: {item.quantity}
+                    </Text>
+                    <Pressable
+                      style={styles.warehouseItemEditButton}
+                      onPress={() => handleEditQuantity(item)}
+                    >
+                      <Text style={styles.warehouseItemEditButtonText}>ערוך</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            ))}
+          </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function NewWarehouseScreen({
+  onSave,
+  onCancel,
+  safeAreaInsets,
+  statusBar,
+}: NewWarehouseScreenProps) {
+  const [name, setName] = useState('');
+  const [location, setLocation] = useState('');
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      Alert.alert('שגיאה', 'אנא הזינו שם מחסן');
+      return;
+    }
+    try {
+      await onSave(name.trim(), location.trim() || undefined);
+    } catch (err) {
+      // Error already handled
+    }
+  };
+
+  return (
+    <SafeAreaView
+      style={[styles.container, { paddingTop: safeAreaInsets.top }]}
+    >
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable onPress={onCancel} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+      </View>
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.warehouseHeader}>
+          <View>
+            <Text style={styles.title}>מחסן חדש</Text>
+            <Text style={styles.subtitle}>
+              הוספת מחסן חדש למערכת
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.formSection}>
+          <Text style={styles.formLabel}>שם מחסן *</Text>
+          <TextInput
+            style={styles.formInput}
+            value={name}
+            onChangeText={setName}
+            placeholder="לדוגמה: מחסן ראשי"
+          />
+
+          <Text style={styles.formLabel}>מיקום</Text>
+          <TextInput
+            style={styles.formInput}
+            value={location}
+            onChangeText={setLocation}
+            placeholder="לדוגמה: קומה 1, חדר 101"
+          />
+        </View>
+
+        <View style={styles.formActions}>
+          <Pressable
+            style={[styles.formButton, styles.formButtonPrimary]}
+            onPress={handleSave}
+          >
+            <Text style={styles.formButtonPrimaryText}>שמור</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.formButton, styles.formButtonSecondary]}
+            onPress={onCancel}
+          >
+            <Text style={styles.formButtonSecondaryText}>ביטול</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function NewWarehouseItemScreen({
+  warehouse,
+  availableItems,
+  onSave,
+  onCancel,
+  safeAreaInsets,
+  statusBar,
+}: NewWarehouseItemScreenProps) {
+  const [itemName, setItemName] = useState<string>('');
+  const [quantity, setQuantity] = useState<string>('0');
+  const [unit, setUnit] = useState<string>('יחידה');
+
+  const handleSave = async () => {
+    if (!itemName.trim()) {
+      Alert.alert('שגיאה', 'אנא הזינו שם מוצר');
+      return;
+    }
+    const qty = parseInt(quantity);
+    if (isNaN(qty) || qty < 0) {
+      Alert.alert('שגיאה', 'אנא הזינו כמות תקינה');
+      return;
+    }
+    if (!unit.trim()) {
+      Alert.alert('שגיאה', 'אנא הזינו יחידה');
+      return;
+    }
+    try {
+      console.log('Saving warehouse item:', { itemName: itemName.trim(), quantity: qty, unit: unit.trim() });
+      await onSave(null, itemName.trim(), qty, unit.trim());
+      console.log('Warehouse item saved successfully');
+    } catch (err: any) {
+      console.error('Error saving warehouse item:', err);
+      Alert.alert('שגיאה', err.message || 'אירעה שגיאה בשמירת המוצר');
+    }
+  };
+
+  if (!warehouse) {
+    return null;
+  }
+
+  return (
+    <SafeAreaView
+      style={[styles.container, { paddingTop: safeAreaInsets.top }]}
+    >
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable onPress={onCancel} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+      </View>
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.warehouseHeader}>
+          <View>
+            <Text style={styles.title}>מוצר חדש</Text>
+            <Text style={styles.subtitle}>
+              הוספת מוצר ל{warehouse.name}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.formSection}>
+          <Text style={styles.formLabel}>שם מוצר *</Text>
+          <TextInput
+            style={styles.formInput}
+            value={itemName}
+            onChangeText={setItemName}
+            placeholder="לדוגמה: חומר ניקוי"
+          />
+
+          <Text style={styles.formLabel}>כמות *</Text>
+          <TextInput
+            style={styles.formInput}
+            value={quantity}
+            onChangeText={setQuantity}
+            keyboardType="numeric"
+            placeholder="0"
+          />
+
+          <Text style={styles.formLabel}>יחידה *</Text>
+          <TextInput
+            style={styles.formInput}
+            value={unit}
+            onChangeText={setUnit}
+            placeholder="לדוגמה: ליטר, יחידה, קילוגרם"
+          />
+          <Text style={styles.formHint}>
+            דוגמאות: ליטר, יחידה, קילוגרם, רול, חבילה
+          </Text>
+        </View>
+
+        <View style={styles.formActions}>
+          <Pressable
+            style={[styles.formButton, styles.formButtonPrimary]}
+            onPress={handleSave}
+          >
+            <Text style={styles.formButtonPrimaryText}>שמור</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.formButton, styles.formButtonSecondary]}
+            onPress={onCancel}
+          >
+            <Text style={styles.formButtonSecondaryText}>ביטול</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
 
 function WarehouseScreen({
   items,
@@ -2232,6 +3624,1485 @@ type MaintenanceTaskDetailScreenProps = {
   safeAreaInsets: { top: number };
   statusBar: React.ReactElement;
 };
+
+// Reports Screen
+type ReportsScreenProps = {
+  orders: Order[];
+  missions: InspectionMission[];
+  warehouses: Array<{id: string; name: string; location?: string}>;
+  allWarehouseItems: Array<{id: string; warehouse_id: string; item_id: string; item_name: string; quantity: number; unit: string}>;
+  inventoryOrders: InventoryOrder[];
+  maintenanceUnits: MaintenanceUnit[];
+  maintenanceTasksReport: Array<any>;
+  attendanceStatus: {is_clocked_in: boolean; session: any} | null;
+  attendanceLogsReport: Array<any>;
+  reportsSummary: {totalRevenue: number; totalPaid: number; totalExpenses: number} | null;
+  reportsSummaryError: string | null;
+  onRefresh: () => void;
+  onOpenOrders: () => void;
+  onOpenExitInspections: () => void;
+  onOpenWarehouse: () => void;
+  onOpenMaintenance: () => void;
+  onOpenAttendance: () => void;
+  onBack: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+};
+
+function ReportsScreen({
+  orders,
+  missions,
+  warehouses,
+  allWarehouseItems,
+  inventoryOrders,
+  maintenanceUnits,
+  maintenanceTasksReport,
+  attendanceStatus,
+  attendanceLogsReport,
+  reportsSummary,
+  reportsSummaryError,
+  onRefresh,
+  onOpenOrders,
+  onOpenExitInspections,
+  onOpenWarehouse,
+  onOpenMaintenance,
+  onOpenAttendance,
+  onBack,
+  safeAreaInsets,
+  statusBar,
+}: ReportsScreenProps) {
+  const [activeReport, setActiveReport] = useState<
+    'orders' | 'inspections' | 'warehouse' | 'maintenance' | 'attendance'
+  >('orders');
+  const [reportView, setReportView] = useState<'list' | 'detail'>('list');
+  const [showAllWarehouseStock, setShowAllWarehouseStock] = useState(false);
+  const [showAllWarehouseOrders, setShowAllWarehouseOrders] = useState(false);
+
+  const localTotalRevenue = orders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+  const localTotalPaid = orders.reduce((sum, o) => sum + (o.paidAmount || 0), 0);
+
+  const totalRevenue = reportsSummary?.totalRevenue ?? localTotalRevenue;
+  const totalPaid = reportsSummary?.totalPaid ?? localTotalPaid;
+  const totalExpenses = reportsSummary?.totalExpenses ?? 0;
+  const pendingAmount = Math.max(0, totalRevenue - totalPaid);
+
+  const formatMoney = (v: number) => `₪${(v || 0).toLocaleString('he-IL')}`;
+  const formatPct = (v: number) => `${Math.round(v || 0)}%`;
+  const msDay = 24 * 60 * 60 * 1000;
+  const safeDate = (s: string) => {
+    const d = new Date(s);
+    return Number.isFinite(d.getTime()) ? d : null;
+  };
+  const diffDays = (a: Date, b: Date) => Math.max(0, Math.round((b.getTime() - a.getTime()) / msDay));
+  const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+
+  const activeOrdersList = useMemo(() => orders.filter(o => o.status !== 'בוטל'), [orders]);
+  const paidOrdersCount = useMemo(() => orders.filter(o => o.status === 'שולם').length, [orders]);
+  const partiallyPaidOrdersCount = useMemo(() => orders.filter(o => o.status === 'שולם חלקית').length, [orders]);
+  const unpaidOrdersCount = useMemo(() => orders.filter(o => (o.totalAmount || 0) > (o.paidAmount || 0)).length, [orders]);
+
+  const avgOrderValue = useMemo(() => {
+    const n = activeOrdersList.length || 1;
+    return totalRevenue / n;
+  }, [activeOrdersList.length, totalRevenue]);
+
+  const paidRate = useMemo(() => {
+    if (!totalRevenue) return 0;
+    return (totalPaid / totalRevenue) * 100;
+  }, [totalPaid, totalRevenue]);
+
+  const avgStayNights = useMemo(() => {
+    const nights = activeOrdersList
+      .map(o => {
+        const a = safeDate(o.arrivalDate);
+        const b = safeDate(o.departureDate);
+        if (!a || !b) return 0;
+        return diffDays(a, b);
+      })
+      .filter(n => n > 0);
+    if (nights.length === 0) return 0;
+    return nights.reduce((s, n) => s + n, 0) / nights.length;
+  }, [activeOrdersList]);
+
+  const revenueByUnit = useMemo(() => {
+    const map = new Map<string, { unit: string; revenue: number; paid: number; outstanding: number; count: number }>();
+    activeOrdersList.forEach(o => {
+      const unit = (o.unitNumber || 'לא צוין').trim() || 'לא צוין';
+      const rev = Number(o.totalAmount || 0);
+      const paid = Number(o.paidAmount || 0);
+      const out = Math.max(0, rev - paid);
+      const prev = map.get(unit) || { unit, revenue: 0, paid: 0, outstanding: 0, count: 0 };
+      map.set(unit, {
+        unit,
+        revenue: prev.revenue + rev,
+        paid: prev.paid + paid,
+        outstanding: prev.outstanding + out,
+        count: prev.count + 1,
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
+  }, [activeOrdersList]);
+
+  const topUnitsByRevenue = useMemo(() => revenueByUnit.slice(0, 8), [revenueByUnit]);
+  const topUnitsByOutstanding = useMemo(() => [...revenueByUnit].sort((a, b) => b.outstanding - a.outstanding).slice(0, 8), [revenueByUnit]);
+
+  const revenueByGuest = useMemo(() => {
+    const map = new Map<string, number>();
+    activeOrdersList.forEach(o => {
+      const guest = (o.guestName || 'לא צוין').trim() || 'לא צוין';
+      map.set(guest, (map.get(guest) || 0) + Number(o.totalAmount || 0));
+    });
+    return Array.from(map.entries())
+      .map(([guest, revenue]) => ({ guest, revenue }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+  }, [activeOrdersList]);
+
+  const occupancyNext30 = useMemo(() => {
+    const start = new Date();
+    const end = new Date(Date.now() + 30 * msDay);
+    const units = Array.from(
+      new Set(activeOrdersList.map(o => (o.unitNumber || '').trim()).filter(Boolean)),
+    );
+    const unitCount = Math.max(1, units.length);
+    const windowDays = 30;
+
+    const overlapNights = (arrival: Date, departure: Date) => {
+      const s = Math.max(arrival.getTime(), start.getTime());
+      const e = Math.min(departure.getTime(), end.getTime());
+      const nights = Math.floor((e - s) / msDay);
+      return Math.max(0, nights);
+    };
+
+    let booked = 0;
+    const perUnit: Array<{ unit: string; nights: number; pct: number }> = [];
+    units.forEach(unit => {
+      let nights = 0;
+      activeOrdersList
+        .filter(o => (o.unitNumber || '').trim() === unit)
+        .forEach(o => {
+          const a = safeDate(o.arrivalDate);
+          const b = safeDate(o.departureDate);
+          if (!a || !b) return;
+          nights += overlapNights(a, b);
+        });
+      booked += nights;
+      perUnit.push({ unit, nights, pct: (nights / windowDays) * 100 });
+    });
+    const overallPct = (booked / (unitCount * windowDays)) * 100;
+    return {
+      unitCount,
+      bookedNights: booked,
+      windowDays,
+      overallPct: clamp(overallPct, 0, 100),
+      perUnit: perUnit.sort((a, b) => b.pct - a.pct).slice(0, 10),
+    };
+  }, [activeOrdersList]);
+
+  const ordersByStatus = useMemo(() => {
+    const counts: Record<string, number> = {};
+    orders.forEach(o => {
+      counts[o.status] = (counts[o.status] || 0) + 1;
+    });
+    return counts;
+  }, [orders]);
+
+  const ordersByUnitReport = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        unit: string;
+        totalRevenue: number;
+        totalPaid: number;
+        totalOutstanding: number;
+        statusCounts: Record<string, number>;
+        orders: Array<
+          Order & {
+            remaining: number;
+          }
+        >;
+      }
+    >();
+
+    (orders || []).forEach(o => {
+      const unit = (o.unitNumber || 'לא צוין').trim() || 'לא צוין';
+      const total = Number(o.totalAmount || 0);
+      const paid = Number(o.paidAmount || 0);
+      const remaining = Math.max(0, total - paid);
+
+      const prev =
+        map.get(unit) || {
+          unit,
+          totalRevenue: 0,
+          totalPaid: 0,
+          totalOutstanding: 0,
+          statusCounts: {},
+          orders: [],
+        };
+
+      prev.totalRevenue += total;
+      prev.totalPaid += paid;
+      prev.totalOutstanding += remaining;
+      prev.statusCounts[o.status] = (prev.statusCounts[o.status] || 0) + 1;
+      prev.orders = [...prev.orders, { ...o, remaining }];
+      map.set(unit, prev);
+    });
+
+    const rows = Array.from(map.values()).map(r => ({
+      ...r,
+      orders: r.orders.sort((a, b) => (a.arrivalDate || '').localeCompare(b.arrivalDate || '')),
+    }));
+
+    // Units with more open/outstanding first
+    rows.sort((a, b) => {
+      if (a.totalOutstanding !== b.totalOutstanding) return b.totalOutstanding - a.totalOutstanding;
+      if (a.totalRevenue !== b.totalRevenue) return b.totalRevenue - a.totalRevenue;
+      return a.unit.localeCompare(b.unit, 'he');
+    });
+
+    return rows;
+  }, [orders]);
+
+  const unpaidOrders = useMemo(() => {
+    return orders
+      .map(o => ({
+        ...o,
+        remaining: Math.max(0, (o.totalAmount || 0) - (o.paidAmount || 0)),
+      }))
+      .filter(o => o.remaining > 0)
+      .sort((a, b) => b.remaining - a.remaining)
+      .slice(0, 10);
+  }, [orders]);
+
+  const upcomingArrivals = useMemo(() => {
+    const now = new Date();
+    const in7 = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    return orders
+      .filter(o => {
+        const d = new Date(o.arrivalDate);
+        return d >= now && d <= in7;
+      })
+      .sort((a, b) => a.arrivalDate.localeCompare(b.arrivalDate))
+      .slice(0, 10);
+  }, [orders]);
+
+  const upcomingDepartures = useMemo(() => {
+    const now = new Date();
+    const in7 = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    return orders
+      .filter(o => {
+        const d = new Date(o.departureDate);
+        return d >= now && d <= in7;
+      })
+      .sort((a, b) => a.departureDate.localeCompare(b.departureDate))
+      .slice(0, 10);
+  }, [orders]);
+
+  const inspectionsTotal = missions.length;
+  const inspectionsNotYet = missions.filter(m => m.status === 'זמן הביקורות טרם הגיע').length;
+  const inspectionsToday = missions.filter(m => m.status === 'דורש ביקורת היום').length;
+  const inspectionsOverdue = missions.filter(m => m.status === 'זמן הביקורת עבר').length;
+  const inspectionsDone = missions.filter(m => m.status === 'הביקורת הושלמה').length;
+
+  const inspectionsNeedingAction = useMemo(() => {
+    return missions
+      .filter(m => m.status !== 'הביקורת הושלמה')
+      .sort((a, b) => a.departureDate.localeCompare(b.departureDate))
+      .slice(0, 10);
+  }, [missions]);
+
+  const inspectionsByUnit = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        unit: string;
+        total: number;
+        notYet: number;
+        today: number;
+        overdue: number;
+        done: number;
+        missions: Array<
+          InspectionMission & {
+            doneTasks: number;
+            totalTasks: number;
+            completionPct: number;
+          }
+        >;
+      }
+    >();
+
+    missions.forEach(m => {
+      const unit = (m.unitNumber || 'לא צוין').trim() || 'לא צוין';
+      const prev = map.get(unit) || {
+        unit,
+        total: 0,
+        notYet: 0,
+        today: 0,
+        overdue: 0,
+        done: 0,
+        missions: [],
+      };
+
+      const totalTasks = m.tasks?.length || 0;
+      const doneTasks = (m.tasks || []).filter(t => t.completed).length;
+      const completionPct =
+        totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+      const next = { ...prev };
+      next.total += 1;
+      if (m.status === 'זמן הביקורות טרם הגיע') next.notYet += 1;
+      else if (m.status === 'דורש ביקורת היום') next.today += 1;
+      else if (m.status === 'זמן הביקורת עבר') next.overdue += 1;
+      else if (m.status === 'הביקורת הושלמה') next.done += 1;
+
+      next.missions = [
+        ...next.missions,
+        { ...m, totalTasks, doneTasks, completionPct },
+      ];
+
+      map.set(unit, next);
+    });
+
+    const rows = Array.from(map.values()).map(r => ({
+      ...r,
+      missions: r.missions.sort((a, b) => b.departureDate.localeCompare(a.departureDate)),
+    }));
+
+    // sort units by most open work (pending + inProgress), then name
+    rows.sort((a, b) => {
+      const openA = a.pending + a.inProgress;
+      const openB = b.pending + b.inProgress;
+      if (openA !== openB) return openB - openA;
+      return a.unit.localeCompare(b.unit, 'he');
+    });
+
+    return rows;
+  }, [missions]);
+
+  const inspectionsCompletion = useMemo(() => {
+    if (missions.length === 0) return 0;
+    const percents = missions.map(m => {
+      const total = m.tasks.length || 0;
+      if (!total) return 0;
+      const done = m.tasks.filter(t => t.completed).length;
+      return Math.round((done / total) * 100);
+    });
+    const avg = Math.round(percents.reduce((s, p) => s + p, 0) / percents.length);
+    return avg;
+  }, [missions]);
+
+  const overdueInspections = useMemo(() => {
+    const today = new Date();
+    return missions
+      .filter(m => m.status !== 'הושלם')
+      .filter(m => {
+        const d = safeDate(m.departureDate);
+        return d ? d.getTime() < today.getTime() : false;
+      })
+      .sort((a, b) => a.departureDate.localeCompare(b.departureDate))
+      .slice(0, 15);
+  }, [missions]);
+
+  const inspectionTaskIssues = useMemo(() => {
+    const map = new Map<string, { name: string; incomplete: number; total: number }>();
+    missions.forEach(m => {
+      m.tasks.forEach(t => {
+        const prev = map.get(t.name) || { name: t.name, incomplete: 0, total: 0 };
+        map.set(t.name, {
+          name: t.name,
+          incomplete: prev.incomplete + (t.completed ? 0 : 1),
+          total: prev.total + 1,
+        });
+      });
+    });
+    return Array.from(map.values())
+      .sort((a, b) => b.incomplete - a.incomplete)
+      .slice(0, 10);
+  }, [missions]);
+
+  const warehouseItemsCount = allWarehouseItems.length;
+  const warehouseTotalQty = allWarehouseItems.reduce((sum, i) => sum + (i.quantity || 0), 0);
+  const warehouseLowStock = useMemo(() => {
+    return allWarehouseItems
+      .filter(i => (i.quantity || 0) <= 2)
+      .sort((a, b) => (a.quantity || 0) - (b.quantity || 0))
+      .slice(0, 20);
+  }, [allWarehouseItems]);
+
+  const warehouseById = useMemo(() => {
+    const map = new Map<string, { id: string; name: string }>();
+    warehouses.forEach(w => map.set(w.id, { id: w.id, name: w.name }));
+    return map;
+  }, [warehouses]);
+
+  const warehouseStatsByWarehouse = useMemo(() => {
+    const map = new Map<string, { warehouseId: string; warehouseName: string; items: number; totalQty: number; lowStock: number }>();
+    allWarehouseItems.forEach(i => {
+      const wid = i.warehouse_id;
+      const wname = warehouseById.get(wid)?.name || 'מחסן';
+      const prev = map.get(wid) || { warehouseId: wid, warehouseName: wname, items: 0, totalQty: 0, lowStock: 0 };
+      const qty = Number(i.quantity || 0);
+      map.set(wid, {
+        warehouseId: wid,
+        warehouseName: wname,
+        items: prev.items + 1,
+        totalQty: prev.totalQty + qty,
+        lowStock: prev.lowStock + (qty <= 2 ? 1 : 0),
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => b.totalQty - a.totalQty);
+  }, [allWarehouseItems, warehouseById]);
+
+  const warehouseInventoryByWarehouse = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        warehouseId: string;
+        warehouseName: string;
+        totalQty: number;
+        items: Array<{ name: string; qty: number; unit: string }>;
+      }
+    >();
+
+    // Aggregate by warehouse + item name
+    const nested = new Map<string, Map<string, { name: string; qty: number; unit: string }>>();
+    allWarehouseItems.forEach(i => {
+      const wid = i.warehouse_id;
+      const wname = warehouseById.get(wid)?.name || 'מחסן';
+      if (!nested.has(wid)) nested.set(wid, new Map());
+      const key = `${(i.item_name || '').trim()}__${(i.unit || '').trim()}`;
+      const prev = nested.get(wid)!.get(key) || {
+        name: (i.item_name || 'מוצר').trim(),
+        qty: 0,
+        unit: (i.unit || 'יחידה').trim(),
+      };
+      nested.get(wid)!.set(key, { ...prev, qty: prev.qty + Number(i.quantity || 0) });
+
+      if (!map.has(wid)) {
+        map.set(wid, { warehouseId: wid, warehouseName: wname, totalQty: 0, items: [] });
+      }
+    });
+
+    nested.forEach((itemsMap, wid) => {
+      const wname = warehouseById.get(wid)?.name || 'מחסן';
+      const items = Array.from(itemsMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'he'));
+      const totalQty = items.reduce((s, it) => s + (it.qty || 0), 0);
+      map.set(wid, { warehouseId: wid, warehouseName: wname, totalQty, items });
+    });
+
+    // Include warehouses with no items
+    warehouses.forEach(w => {
+      if (!map.has(w.id)) map.set(w.id, { warehouseId: w.id, warehouseName: w.name, totalQty: 0, items: [] });
+    });
+
+    return Array.from(map.values()).sort((a, b) => b.totalQty - a.totalQty);
+  }, [allWarehouseItems, warehouseById, warehouses]);
+
+  const topWarehouseItemsByQty = useMemo(() => {
+    const map = new Map<string, { name: string; unit: string; totalQty: number; warehouses: number }>();
+    const seenByWarehouse = new Map<string, Set<string>>(); // name -> set(warehouse_id)
+    allWarehouseItems.forEach(i => {
+      const name = (i.item_name || 'מוצר').trim();
+      const unit = (i.unit || '').trim();
+      const qty = Number(i.quantity || 0);
+      const prev = map.get(name) || { name, unit: unit || 'יחידה', totalQty: 0, warehouses: 0 };
+      map.set(name, { ...prev, unit: prev.unit || unit || 'יחידה', totalQty: prev.totalQty + qty });
+      if (!seenByWarehouse.has(name)) seenByWarehouse.set(name, new Set());
+      seenByWarehouse.get(name)!.add(i.warehouse_id);
+    });
+    // finalize warehouse count
+    const rows = Array.from(map.values()).map(r => ({
+      ...r,
+      warehouses: seenByWarehouse.get(r.name)?.size || 1,
+    }));
+    return rows.sort((a, b) => b.totalQty - a.totalQty).slice(0, 12);
+  }, [allWarehouseItems]);
+
+  const inventoryOrdersSorted = useMemo(() => {
+    return [...(inventoryOrders || [])].sort((a, b) => (b.orderDate || '').localeCompare(a.orderDate || ''));
+  }, [inventoryOrders]);
+
+  const inventoryOrdersByStatus = useMemo(() => {
+    const counts: Record<string, number> = {};
+    (inventoryOrders || []).forEach(o => {
+      counts[o.status] = (counts[o.status] || 0) + 1;
+    });
+    return counts;
+  }, [inventoryOrders]);
+
+  const maintenanceTasksEffective = useMemo(() => {
+    if (maintenanceTasksReport && maintenanceTasksReport.length > 0) return maintenanceTasksReport;
+    return maintenanceUnits.flatMap(u => u.tasks);
+  }, [maintenanceTasksReport, maintenanceUnits]);
+
+  const normalizeMaintenanceStatus = (s: string) => {
+    if (s === 'open' || s === 'פתוח') return 'פתוח';
+    if (s === 'in_progress' || s === 'בטיפול') return 'בטיפול';
+    if (s === 'closed' || s === 'סגור') return 'סגור';
+    return s || 'פתוח';
+  };
+
+  const maintenanceTotal = maintenanceTasksEffective.length;
+  const maintenanceOpen = maintenanceTasksEffective.filter((t: any) => normalizeMaintenanceStatus(t.status) === 'פתוח').length;
+  const maintenanceInProgress = maintenanceTasksEffective.filter((t: any) => normalizeMaintenanceStatus(t.status) === 'בטיפול').length;
+  const maintenanceClosed = maintenanceTasksEffective.filter((t: any) => normalizeMaintenanceStatus(t.status) === 'סגור').length;
+
+  const maintenanceTopOpen = useMemo(() => {
+    return maintenanceTasksEffective
+      .filter((t: any) => normalizeMaintenanceStatus(t.status) !== 'סגור')
+      .slice(0, 10);
+  }, [maintenanceTasksEffective]);
+
+  const maintenanceByPriority = useMemo(() => {
+    const map = new Map<string, number>();
+    maintenanceTasksEffective.forEach((t: any) => {
+      const p = (t.priority || 'לא צוין').toString();
+      map.set(p, (map.get(p) || 0) + 1);
+    });
+    return Array.from(map.entries())
+      .map(([priority, count]) => ({ priority, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+  }, [maintenanceTasksEffective]);
+
+  const maintenanceByUnit = useMemo(() => {
+    const map = new Map<string, { unit: string; total: number; open: number }>();
+    maintenanceTasksEffective.forEach((t: any) => {
+      const unit = (t.unit_id || t.unitId || t.unit || 'לא צוין').toString();
+      const st = normalizeMaintenanceStatus(t.status);
+      const prev = map.get(unit) || { unit, total: 0, open: 0 };
+      map.set(unit, { unit, total: prev.total + 1, open: prev.open + (st === 'סגור' ? 0 : 1) });
+    });
+    return Array.from(map.values()).sort((a, b) => b.open - a.open).slice(0, 10);
+  }, [maintenanceTasksEffective]);
+
+  const maintenanceOldOpen = useMemo(() => {
+    const today = new Date();
+    const items = maintenanceTasksEffective
+      .filter((t: any) => normalizeMaintenanceStatus(t.status) !== 'סגור')
+      .map((t: any) => {
+        const d = safeDate(t.created_date || t.createdDate || '');
+        const age = d ? diffDays(d, today) : 0;
+        return { ...t, _ageDays: age };
+      })
+      .sort((a: any, b: any) => (b._ageDays || 0) - (a._ageDays || 0))
+      .slice(0, 10);
+    return items;
+  }, [maintenanceTasksEffective]);
+
+  const maintenanceUnitsMap = useMemo(() => {
+    const map = new Map<string, string>();
+    maintenanceUnits.forEach(u => map.set(u.id, u.name));
+    return map;
+  }, [maintenanceUnits]);
+
+  const maintenanceTasksByUnit = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        unitId: string;
+        unitName: string;
+        total: number;
+        open: number;
+        inProgress: number;
+        closed: number;
+        tasks: any[];
+      }
+    >();
+
+    maintenanceTasksEffective.forEach((t: any) => {
+      const unitId = (t.unit_id || t.unitId || t.unit || 'לא צוין').toString();
+      const unitName = maintenanceUnitsMap.get(unitId) || unitId;
+      const st = normalizeMaintenanceStatus(t.status);
+      const prev =
+        map.get(unitId) || {
+          unitId,
+          unitName,
+          total: 0,
+          open: 0,
+          inProgress: 0,
+          closed: 0,
+          tasks: [],
+        };
+      const next = { ...prev };
+      next.total += 1;
+      if (st === 'פתוח') next.open += 1;
+      else if (st === 'בטיפול') next.inProgress += 1;
+      else if (st === 'סגור') next.closed += 1;
+      next.tasks = [...next.tasks, t];
+      map.set(unitId, next);
+    });
+
+    const rows = Array.from(map.values())
+      .map(r => ({
+        ...r,
+        tasks: r.tasks.sort((a: any, b: any) => {
+          const sa = normalizeMaintenanceStatus(a.status);
+          const sb = normalizeMaintenanceStatus(b.status);
+          const order = (s: string) => (s === 'פתוח' ? 0 : s === 'בטיפול' ? 1 : 2);
+          const cmp = order(sa) - order(sb);
+          if (cmp !== 0) return cmp;
+          const da = safeDate(a.created_date || a.createdDate || '')?.getTime() || 0;
+          const db = safeDate(b.created_date || b.createdDate || '')?.getTime() || 0;
+          return db - da;
+        }),
+      }))
+      .sort((a, b) => b.open + b.inProgress - (a.open + a.inProgress));
+
+    return rows;
+  }, [maintenanceTasksEffective, maintenanceUnitsMap]);
+
+  const normalizeClock = (v: any) => (typeof v === 'string' ? v : '');
+  const attendanceLogs = attendanceLogsReport || [];
+  const currentlyClockedInEmployees = useMemo(() => {
+    const active = new Set<string>();
+    (attendanceLogs as any[]).forEach(l => {
+      const emp = l.employee || l.emp || l.user || '';
+      const clockOut = l.clock_out;
+      if (emp && (clockOut === null || clockOut === undefined || clockOut === '')) {
+        active.add(emp);
+      }
+    });
+    return Array.from(active).sort();
+  }, [attendanceLogs]);
+
+  const hoursLast7DaysByEmployee = useMemo(() => {
+    const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const map = new Map<string, number>();
+    (attendanceLogs as any[]).forEach(l => {
+      const emp = l.employee || '';
+      const ci = new Date(normalizeClock(l.clock_in)).getTime();
+      if (!emp || !ci || ci < since) return;
+      const coRaw = normalizeClock(l.clock_out);
+      const co = coRaw ? new Date(coRaw).getTime() : Date.now();
+      const hours = Math.max(0, (co - ci) / (1000 * 60 * 60));
+      map.set(emp, (map.get(emp) || 0) + hours);
+    });
+    return Array.from(map.entries())
+      .map(([employee, hours]) => ({ employee, hours }))
+      .sort((a, b) => b.hours - a.hours)
+      .slice(0, 10);
+  }, [attendanceLogs]);
+
+  const hoursLast30DaysByEmployee = useMemo(() => {
+    const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const map = new Map<string, number>();
+    (attendanceLogs as any[]).forEach(l => {
+      const emp = l.employee || '';
+      const ci = new Date(normalizeClock(l.clock_in)).getTime();
+      if (!emp || !ci || ci < since) return;
+      const coRaw = normalizeClock(l.clock_out);
+      const co = coRaw ? new Date(coRaw).getTime() : Date.now();
+      const hours = Math.max(0, (co - ci) / (1000 * 60 * 60));
+      map.set(emp, (map.get(emp) || 0) + hours);
+    });
+    return Array.from(map.entries())
+      .map(([employee, hours]) => ({ employee, hours }))
+      .sort((a, b) => b.hours - a.hours)
+      .slice(0, 10);
+  }, [attendanceLogs]);
+
+  const attendanceRecentSessions = useMemo(() => {
+    const rows = (attendanceLogs as any[])
+      .slice(0, 20)
+      .map(l => {
+        const emp = l.employee || '';
+        const ci = safeDate(normalizeClock(l.clock_in));
+        const co = safeDate(normalizeClock(l.clock_out));
+        const end = co || new Date();
+        const durHrs = ci ? Math.max(0, (end.getTime() - ci.getTime()) / (1000 * 60 * 60)) : 0;
+        const day = ci ? `${ci.getDate()}/${ci.getMonth() + 1}` : '';
+        const timeIn = ci ? `${ci.getHours().toString().padStart(2, '0')}:${ci.getMinutes().toString().padStart(2, '0')}` : '';
+        const timeOut = co ? `${co.getHours().toString().padStart(2, '0')}:${co.getMinutes().toString().padStart(2, '0')}` : (normalizeClock(l.clock_out) ? '' : '—');
+        return { id: l.id || `${emp}-${day}-${timeIn}`, emp, day, timeIn, timeOut, durHrs, isOpen: !co };
+      });
+    return rows;
+  }, [attendanceLogs]);
+
+  const attendancePeriodsByEmployee = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        employee: string;
+        isActive: boolean;
+        sessions: Array<{ id: string; day: string; timeIn: string; timeOut: string; durHrs: number; isOpen: boolean }>;
+        totalHours: number;
+      }
+    >();
+
+    attendanceRecentSessions.forEach(s => {
+      const emp = s.emp || 'לא צוין';
+      const prev = map.get(emp) || { employee: emp, isActive: false, sessions: [], totalHours: 0 };
+      map.set(emp, {
+        employee: emp,
+        isActive: prev.isActive || s.isOpen,
+        sessions: [...prev.sessions, s],
+        totalHours: prev.totalHours + (s.durHrs || 0),
+      });
+    });
+
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+      return b.totalHours - a.totalHours;
+    });
+  }, [attendanceRecentSessions]);
+
+  const isClockedIn = attendanceStatus?.is_clocked_in || false;
+
+  const reportTitle =
+    activeReport === 'orders'
+      ? 'דוח הזמנות'
+      : activeReport === 'inspections'
+        ? 'דוח ביקורות יציאה'
+        : activeReport === 'warehouse'
+          ? 'דוח מחסן'
+          : activeReport === 'maintenance'
+            ? 'דוח תחזוקה'
+            : 'דוח נוכחות';
+
+  const openReport = (r: typeof activeReport) => {
+    setActiveReport(r);
+    setReportView('detail');
+  };
+
+  return (
+    <SafeAreaView style={[styles.container, { paddingTop: safeAreaInsets.top }]}>
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable
+          onPress={() => {
+            if (reportView === 'detail') {
+              setReportView('list');
+              return;
+            }
+            onBack();
+          }}
+          style={styles.backButton}
+        >
+          <Text style={styles.backButtonText}>
+            ← {reportView === 'detail' ? 'לכל הדוחות' : 'חזרה'}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={onRefresh}
+          style={[styles.backButton, { marginRight: 10, backgroundColor: '#ffffff' }]}
+        >
+          <Text style={styles.backButtonText}>רענון</Text>
+        </Pressable>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <View style={styles.ordersPageHeader}>
+          <Text style={styles.ordersPageTitle}>
+            {reportView === 'detail' ? `${reportTitle} – פירוט` : 'דוחות'}
+          </Text>
+          <Text style={styles.ordersPageSubtitle}>
+            {reportView === 'detail'
+              ? 'נתונים מורחבים ותובנות – מתוך המערכת'
+              : 'סיכום מצב המערכת לפי מודולים (ללא צ׳אט)'}
+          </Text>
+        </View>
+
+        <View style={styles.summaryCardEnhanced}>
+          <View style={styles.summaryCardHeader}>
+            <Text style={styles.summaryTitleEnhanced}>סיכום פיננסי</Text>
+          </View>
+          <View style={styles.summaryStatsRow}>
+            <View style={styles.summaryStatItem}>
+              <Text style={styles.summaryStatValue}>₪{totalRevenue.toLocaleString('he-IL')}</Text>
+              <Text style={styles.summaryStatLabel}>הכנסות</Text>
+            </View>
+            <View style={styles.summaryStatDivider} />
+            <View style={styles.summaryStatItem}>
+              <Text style={styles.summaryStatValue}>₪{totalPaid.toLocaleString('he-IL')}</Text>
+              <Text style={styles.summaryStatLabel}>שולם</Text>
+            </View>
+          </View>
+          <View style={[styles.summaryStatsRow, { marginTop: 14 }]}>
+            <View style={styles.summaryStatItem}>
+              <Text style={styles.summaryStatValue}>₪{pendingAmount.toLocaleString('he-IL')}</Text>
+              <Text style={styles.summaryStatLabel}>יתרה פתוחה</Text>
+            </View>
+            <View style={styles.summaryStatDivider} />
+            <View style={styles.summaryStatItem}>
+              <Text style={styles.summaryStatValue}>₪{totalExpenses.toLocaleString('he-IL')}</Text>
+              <Text style={styles.summaryStatLabel}>הוצאות</Text>
+            </View>
+          </View>
+          {reportsSummaryError ? (
+            <View style={styles.summaryNoteContainer}>
+              <Text style={styles.summaryNoteEnhanced}>
+                {reportsSummaryError}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        {reportView === 'list' ? (
+          <View style={{ marginTop: 14 }}>
+            <Text style={styles.sectionTitle}>דוחות לפי מסך</Text>
+            <View style={styles.optionGrid}>
+              <OptionCard
+                title="דוח הזמנות"
+                icon="הז"
+                accent="#38bdf8"
+                details={[
+                  `מספר הזמנות: ${orders.length}`,
+                  `סה״כ הכנסות: ₪${localTotalRevenue.toLocaleString('he-IL')}`,
+                  `שולם: ₪${localTotalPaid.toLocaleString('he-IL')}`,
+                ]}
+                cta="פתח דוח מלא"
+                onPress={() => openReport('orders')}
+              />
+              <OptionCard
+                title="דוח ביקורות יציאה"
+                icon="בי"
+                accent="#f97316"
+                details={[
+                  `סה״כ ביקורות: ${inspectionsTotal}`,
+                  `דורש היום: ${inspectionsToday} | עבר: ${inspectionsOverdue}`,
+                  `טרם הגיע: ${inspectionsNotYet} | הושלמה: ${inspectionsDone}`,
+                ]}
+                cta="פתח דוח מלא"
+                onPress={() => openReport('inspections')}
+              />
+              <OptionCard
+                title="דוח מחסן"
+                icon="מח"
+                accent="#a78bfa"
+                details={[
+                  `מספר מחסנים: ${warehouses.length}`,
+                  `מספר פריטים: ${warehouseItemsCount}`,
+                  `כמות כוללת: ${warehouseTotalQty}`,
+                ]}
+                cta="פתח דוח מלא"
+                onPress={() => openReport('warehouse')}
+              />
+              <OptionCard
+                title="דוח תחזוקה"
+                icon="תח"
+                accent="#22c55e"
+                details={[
+                  `סה״כ משימות: ${maintenanceTotal}`,
+                  `פתוח: ${maintenanceOpen} | בטיפול: ${maintenanceInProgress}`,
+                  `סגור: ${maintenanceClosed}`,
+                ]}
+                cta="פתח דוח מלא"
+                onPress={() => openReport('maintenance')}
+              />
+              <OptionCard
+                title="דוח נוכחות"
+                icon="נכ"
+                accent="#ec4899"
+                details={[
+                  `סטטוס: ${isClockedIn ? 'בעבודה' : 'לא בעבודה'}`,
+                  `לוגים אחרונים: ${(attendanceLogsReport || []).length}`,
+                ]}
+                cta="פתח דוח מלא"
+                onPress={() => openReport('attendance')}
+              />
+            </View>
+          </View>
+        ) : (
+          <View style={[styles.card, { marginTop: 18 }]}>
+            <View style={{ flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={[styles.title, { fontSize: 20 }]}>{reportTitle}</Text>
+              <Pressable
+                onPress={
+                  activeReport === 'orders'
+                    ? onOpenOrders
+                    : activeReport === 'inspections'
+                      ? onOpenExitInspections
+                      : activeReport === 'warehouse'
+                        ? onOpenWarehouse
+                        : activeReport === 'maintenance'
+                          ? onOpenMaintenance
+                          : onOpenAttendance
+                }
+                style={[styles.addOrderButton, { backgroundColor: '#0ea5e9' }]}
+              >
+                <Text style={styles.addOrderButtonText}>פתח מסך</Text>
+              </Pressable>
+            </View>
+
+            {activeReport === 'orders' ? (
+            <View style={{ marginTop: 10 }}>
+              <Text style={styles.label}>כל ההזמנות לפי יחידת נופש</Text>
+              <Text style={styles.progressNote}>
+                סה״כ הזמנות: {orders.length} | חדש: {ordersByStatus['חדש'] || 0} | באישור: {ordersByStatus['באישור'] || 0} | שולם חלקית: {ordersByStatus['שולם חלקית'] || 0} | שולם: {ordersByStatus['שולם'] || 0} | בוטל: {ordersByStatus['בוטל'] || 0}
+              </Text>
+
+              {ordersByUnitReport.length === 0 ? (
+                <Text style={styles.progressNote}>אין הזמנות</Text>
+              ) : (
+                ordersByUnitReport.map(u => (
+                  <View key={u.unit} style={[styles.card, { marginTop: 12, borderColor: '#bae6fd' }]}>
+                    <Text style={[styles.title, { fontSize: 18 }]}>{u.unit}</Text>
+                    <Text style={styles.progressNote}>
+                      הזמנות: {u.orders.length} | הכנסות: {formatMoney(u.totalRevenue)} | שולם: {formatMoney(u.totalPaid)} | יתרה: {formatMoney(u.totalOutstanding)}
+                    </Text>
+                    <Text style={styles.progressNote}>
+                      סטטוסים: חדש {u.statusCounts['חדש'] || 0} | באישור {u.statusCounts['באישור'] || 0} | שולם חלקית {u.statusCounts['שולם חלקית'] || 0} | שולם {u.statusCounts['שולם'] || 0} | בוטל {u.statusCounts['בוטל'] || 0}
+                    </Text>
+                    <View style={{ marginTop: 8 }}>
+                      {u.orders.map(o => (
+                        <Text key={o.id} style={styles.progressNote}>
+                          #{o.id} | {o.arrivalDate}–{o.departureDate} | {o.guestName || 'ללא שם'} | סטטוס: {o.status} | אורחים: {o.guestsCount} | {formatMoney(o.paidAmount)}/{formatMoney(o.totalAmount)} (יתרה {formatMoney(o.remaining)}) | {o.paymentMethod || 'לא צוין'}
+                        </Text>
+                      ))}
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          ) : null}
+
+            {activeReport === 'inspections' ? (
+            <View style={{ marginTop: 10 }}>
+              <Text style={styles.label}>כל הביקורות לפי יחידת נופש</Text>
+              <Text style={styles.progressNote}>
+                סה״כ: {inspectionsTotal} | טרם הגיע: {inspectionsNotYet} | דורש היום: {inspectionsToday} | עבר: {inspectionsOverdue} | הושלמה: {inspectionsDone}
+              </Text>
+
+              {inspectionsByUnit.length === 0 ? (
+                <Text style={styles.progressNote}>אין ביקורות</Text>
+              ) : (
+                inspectionsByUnit.map(u => (
+                  <View key={u.unit} style={[styles.card, { marginTop: 12, borderColor: '#fed7aa' }]}>
+                    <Text style={[styles.title, { fontSize: 18 }]}>{u.unit}</Text>
+                    <Text style={styles.progressNote}>
+                      טרם הגיע: {u.notYet} | דורש היום: {u.today} | עבר: {u.overdue} | הושלמה: {u.done} | סה״כ: {u.total}
+                    </Text>
+                    <View style={{ marginTop: 8 }}>
+                      {u.missions.map(m => (
+                        <Text key={m.id} style={styles.progressNote}>
+                          {m.departureDate} | סטטוס: {m.status} | משימות: {m.doneTasks}/{m.totalTasks} ({m.completionPct}%)
+                        </Text>
+                      ))}
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          ) : null}
+
+            {activeReport === 'warehouse' ? (
+            <View style={{ marginTop: 10 }}>
+              <Text style={styles.label}>חלק 1: מלאי – כמה יש מכל מוצר בכל מחסן</Text>
+              <Text style={styles.progressNote}>
+                מחסנים: {warehouses.length} | פריטים (שורות): {warehouseItemsCount} | כמות כוללת: {warehouseTotalQty}
+              </Text>
+
+              <Pressable
+                onPress={() => setShowAllWarehouseStock(v => !v)}
+                style={[styles.addOrderButton, { backgroundColor: '#a78bfa', marginTop: 10, alignSelf: 'flex-start' }]}
+              >
+                <Text style={styles.addOrderButtonText}>{showAllWarehouseStock ? 'הצג פחות' : 'הצג הכל'}</Text>
+              </Pressable>
+
+              {warehouseInventoryByWarehouse.length === 0 ? (
+                <Text style={[styles.progressNote, { marginTop: 10 }]}>אין נתוני מלאי</Text>
+              ) : (
+                warehouseInventoryByWarehouse.map(w => (
+                  <View key={w.warehouseId} style={[styles.card, { marginTop: 12, borderColor: '#ddd6fe' }]}>
+                    <Text style={[styles.title, { fontSize: 18 }]}>{w.warehouseName}</Text>
+                    <Text style={styles.progressNote}>
+                      כמות כוללת: {w.totalQty} | מספר מוצרים: {w.items.length}
+                    </Text>
+                    <View style={{ marginTop: 8 }}>
+                      {(showAllWarehouseStock ? w.items : w.items.slice(0, 25)).map(it => (
+                        <Text key={`${w.warehouseId}-${it.name}-${it.unit}`} style={styles.progressNote}>
+                          {it.name}: {it.qty} {it.unit}
+                        </Text>
+                      ))}
+                      {!showAllWarehouseStock && w.items.length > 25 ? (
+                        <Text style={[styles.progressNote, { marginTop: 6 }]}>
+                          ועוד {w.items.length - 25} מוצרים…
+                        </Text>
+                      ) : null}
+                    </View>
+                  </View>
+                ))
+              )}
+
+              <Text style={[styles.label, { marginTop: 16 }]}>חלק 2: הזמנות – סטטוס ותוכן</Text>
+              <Text style={styles.progressNote}>
+                סה״כ הזמנות: {inventoryOrders.length} | ממתין לאישור: {inventoryOrdersByStatus['ממתין לאישור'] || 0} | מאושר: {inventoryOrdersByStatus['מאושר'] || 0} | בהזמנה: {inventoryOrdersByStatus['בהזמנה'] || 0} | התקבל: {inventoryOrdersByStatus['התקבל'] || 0} | בוטל: {inventoryOrdersByStatus['בוטל'] || 0}
+              </Text>
+
+              <Pressable
+                onPress={() => setShowAllWarehouseOrders(v => !v)}
+                style={[styles.addOrderButton, { backgroundColor: '#f59e0b', marginTop: 10, alignSelf: 'flex-start' }]}
+              >
+                <Text style={styles.addOrderButtonText}>{showAllWarehouseOrders ? 'הצג פחות' : 'הצג הכל'}</Text>
+              </Pressable>
+
+              {inventoryOrdersSorted.length === 0 ? (
+                <Text style={[styles.progressNote, { marginTop: 10 }]}>אין הזמנות מחסן</Text>
+              ) : (
+                (showAllWarehouseOrders ? inventoryOrdersSorted : inventoryOrdersSorted.slice(0, 30)).map(o => (
+                  <View key={o.id} style={[styles.card, { marginTop: 12, borderColor: '#fde68a' }]}>
+                    <Text style={[styles.title, { fontSize: 16 }]}>{o.id}</Text>
+                    <Text style={styles.progressNote}>סטטוס: {o.status}</Text>
+                    <Text style={styles.progressNote}>
+                      תוכן: {o.itemName} — {o.quantity} {o.unit}
+                    </Text>
+                    <Text style={styles.progressNote}>
+                      סוג: {o.orderType}
+                      {o.orderedBy ? ` | הוזמן ע\"י: ${o.orderedBy}` : ''}
+                      {o.unitNumber ? ` | יחידה: ${o.unitNumber}` : ''}
+                    </Text>
+                    <Text style={styles.progressNote}>
+                      תאריך הזמנה: {o.orderDate || '-'}
+                      {o.deliveryDate ? ` | תאריך אספקה: ${o.deliveryDate}` : ''}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </View>
+          ) : null}
+
+            {activeReport === 'maintenance' ? (
+            <View style={{ marginTop: 10 }}>
+              <Text style={styles.label}>סיכום</Text>
+              <Text style={styles.progressNote}>
+                פתוח: {maintenanceOpen} | בטיפול: {maintenanceInProgress} | סגור: {maintenanceClosed} | סה״כ: {maintenanceTotal}
+              </Text>
+
+              <Text style={[styles.label, { marginTop: 12 }]}>התפלגות לפי עדיפות (Top 8)</Text>
+              {maintenanceByPriority.length === 0 ? (
+                <Text style={styles.progressNote}>אין נתונים</Text>
+              ) : (
+                maintenanceByPriority.map(p => (
+                  <Text key={p.priority} style={styles.progressNote}>
+                    {p.priority}: {p.count}
+                  </Text>
+                ))
+              )}
+
+              <Text style={[styles.label, { marginTop: 12 }]}>יחידות עם הכי הרבה משימות פתוחות (Top 10)</Text>
+              {maintenanceByUnit.length === 0 ? (
+                <Text style={styles.progressNote}>אין נתונים</Text>
+              ) : (
+                maintenanceByUnit.map(u => (
+                  <Text key={u.unit} style={styles.progressNote}>
+                    {u.unit}: פתוחות {u.open} | סה״כ {u.total}
+                  </Text>
+                ))
+              )}
+
+              <Text style={[styles.label, { marginTop: 12 }]}>משימות פתוחות (Top 10)</Text>
+              {maintenanceTopOpen.length === 0 ? (
+                <Text style={styles.progressNote}>אין משימות פתוחות</Text>
+              ) : (
+                maintenanceTopOpen.map((t: any) => (
+                  <Text key={t.id} style={styles.progressNote}>
+                    {t.title || 'משימה'} | סטטוס: {normalizeMaintenanceStatus(t.status)} | עדיפות: {t.priority || '-'}
+                  </Text>
+                ))
+              )}
+
+              <Text style={[styles.label, { marginTop: 12 }]}>משימות פתוחות הכי ישנות (Top 10)</Text>
+              {maintenanceOldOpen.length === 0 ? (
+                <Text style={styles.progressNote}>אין נתונים</Text>
+              ) : (
+                maintenanceOldOpen.map((t: any) => (
+                  <Text key={t.id} style={styles.progressNote}>
+                    {t.title || 'משימה'} | {t._ageDays || 0} ימים | סטטוס: {normalizeMaintenanceStatus(t.status)}
+                  </Text>
+                ))
+              )}
+
+              <Text style={[styles.label, { marginTop: 16 }]}>כל המשימות לפי יחידה</Text>
+              {maintenanceTasksByUnit.length === 0 ? (
+                <Text style={styles.progressNote}>אין משימות תחזוקה</Text>
+              ) : (
+                maintenanceTasksByUnit.map(u => (
+                  <View key={u.unitId} style={[styles.card, { marginTop: 12, borderColor: '#bbf7d0' }]}>
+                    <Text style={[styles.title, { fontSize: 18 }]}>{u.unitName}</Text>
+                    <Text style={styles.progressNote}>
+                      פתוח: {u.open} | בטיפול: {u.inProgress} | סגור: {u.closed} | סה״כ: {u.total}
+                    </Text>
+                    <View style={{ marginTop: 8 }}>
+                      {u.tasks.map((t: any) => (
+                        <Text key={t.id} style={styles.progressNote}>
+                          {t.title || 'משימה'} | סטטוס: {normalizeMaintenanceStatus(t.status)} | עדיפות: {t.priority || '-'}
+                        </Text>
+                      ))}
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          ) : null}
+
+            {activeReport === 'attendance' ? (
+            <View style={{ marginTop: 10 }}>
+              <Text style={styles.label}>סטטוס עכשיו</Text>
+              <Text style={styles.progressNote}>
+                {isClockedIn ? 'בעבודה' : 'לא בעבודה'} | עובדים מחוברים: {currentlyClockedInEmployees.length}
+              </Text>
+              {currentlyClockedInEmployees.length > 0 ? (
+                <Text style={styles.progressNote}>
+                  עובדים פעילים: {currentlyClockedInEmployees.join(', ')}
+                </Text>
+              ) : null}
+
+              <Text style={[styles.label, { marginTop: 12 }]}>שעות ב-7 ימים אחרונים (Top 10)</Text>
+              {hoursLast7DaysByEmployee.length === 0 ? (
+                <Text style={styles.progressNote}>אין נתוני נוכחות</Text>
+              ) : (
+                hoursLast7DaysByEmployee.map(r => (
+                  <Text key={r.employee} style={styles.progressNote}>
+                    {r.employee}: {r.hours.toFixed(1)} שעות
+                  </Text>
+                ))
+              )}
+
+              <Text style={[styles.label, { marginTop: 12 }]}>שעות ב-30 ימים אחרונים (Top 10)</Text>
+              {hoursLast30DaysByEmployee.length === 0 ? (
+                <Text style={styles.progressNote}>אין נתונים</Text>
+              ) : (
+                hoursLast30DaysByEmployee.map(r => (
+                  <Text key={r.employee} style={styles.progressNote}>
+                    {r.employee}: {r.hours.toFixed(1)} שעות
+                  </Text>
+                ))
+              )}
+
+              <Text style={[styles.label, { marginTop: 12 }]}>סשנים אחרונים (Top 20)</Text>
+              {attendanceRecentSessions.length === 0 ? (
+                <Text style={styles.progressNote}>אין סשנים</Text>
+              ) : (
+                attendanceRecentSessions.map(s => (
+                  <Text key={s.id} style={styles.progressNote}>
+                    {s.emp} | {s.day} | {s.timeIn} - {s.timeOut} | {s.durHrs.toFixed(1)} שעות{s.isOpen ? ' (פתוח)' : ''}
+                  </Text>
+                ))
+              )}
+
+              <Text style={[styles.label, { marginTop: 16 }]}>תקופות עבודה לפי עובד</Text>
+              {attendancePeriodsByEmployee.length === 0 ? (
+                <Text style={styles.progressNote}>אין נתונים</Text>
+              ) : (
+                attendancePeriodsByEmployee.map(emp => (
+                  <View key={emp.employee} style={[styles.card, { marginTop: 12, borderColor: '#fbcfe8' }]}>
+                    <Text style={[styles.title, { fontSize: 18 }]}>{emp.employee}</Text>
+                    <Text style={styles.progressNote}>
+                      סטטוס: {emp.isActive ? 'בעבודה עכשיו' : 'לא בעבודה'} | סך שעות (מהלוגים האחרונים): {emp.totalHours.toFixed(1)}
+                    </Text>
+                    <View style={{ marginTop: 8 }}>
+                      {emp.sessions.map(s => (
+                        <Text key={s.id} style={styles.progressNote}>
+                          {s.day} | {s.timeIn} - {s.timeOut} | {s.durHrs.toFixed(1)} שעות{s.isOpen ? ' (פתוח)' : ''}
+                        </Text>
+                      ))}
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          ) : null}
+          </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// Chat Screen
+type ChatScreenProps = {
+  messages: Array<{id: number; sender: string; content: string; created_at: string}>;
+  userName: string;
+  onSendMessage: (content: string) => void;
+  onBack: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+};
+
+function ChatScreen({
+  messages,
+  userName,
+  onSendMessage,
+  onBack,
+  safeAreaInsets,
+  statusBar,
+}: ChatScreenProps) {
+  const [newMessage, setNewMessage] = useState('');
+  const scrollViewRef = React.useRef<ScrollView>(null);
+
+  const handleSend = () => {
+    if (newMessage.trim()) {
+      onSendMessage(newMessage);
+      setNewMessage('');
+      setTimeout(() => {
+        scrollViewRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
+  };
+
+  const formatTime = (dateString: string) => {
+    try {
+      const date = new Date(dateString);
+      const now = new Date();
+      const diffMs = now.getTime() - date.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      
+      if (diffMins < 1) return 'עכשיו';
+      if (diffMins < 60) return `לפני ${diffMins} דקות`;
+      if (diffMins < 1440) return `לפני ${Math.floor(diffMins / 60)} שעות`;
+      
+      const day = date.getDate();
+      const month = date.getMonth() + 1;
+      const hours = date.getHours();
+      const minutes = date.getMinutes();
+      return `${day}/${month} ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    } catch {
+      return '';
+    }
+  };
+
+  React.useEffect(() => {
+    setTimeout(() => {
+      scrollViewRef.current?.scrollToEnd({ animated: false });
+    }, 100);
+  }, [messages]);
+
+  return (
+    <SafeAreaView style={[styles.container, { paddingTop: safeAreaInsets.top }]}>
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable onPress={onBack} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+        <Text style={styles.ordersPageTitle}>צ'אט פנימי</Text>
+      </View>
+
+      <View style={styles.chatContainer}>
+        <ScrollView
+          ref={scrollViewRef}
+          style={styles.chatMessagesList}
+          contentContainerStyle={styles.chatMessagesContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          {messages.length === 0 ? (
+            <View style={styles.chatEmptyState}>
+              <Text style={styles.chatEmptyText}>אין הודעות עדיין</Text>
+              <Text style={styles.chatEmptySubtext}>היה הראשון לכתוב!</Text>
+            </View>
+          ) : (
+            messages.map((message) => {
+              const isOwnMessage = message.sender === userName;
+              return (
+                <View
+                  key={message.id}
+                  style={[
+                    styles.chatMessageContainer,
+                    isOwnMessage && styles.chatMessageOwn,
+                  ]}
+                >
+                  {!isOwnMessage && (
+                    <Text style={styles.chatMessageSender}>{message.sender}</Text>
+                  )}
+                  <View
+                    style={[
+                      styles.chatMessageBubble,
+                      isOwnMessage ? styles.chatMessageBubbleOwn : styles.chatMessageBubbleOther,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.chatMessageText,
+                        isOwnMessage ? styles.chatMessageTextOwn : styles.chatMessageTextOther,
+                      ]}
+                    >
+                      {message.content}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.chatMessageTime,
+                        isOwnMessage ? styles.chatMessageTimeOwn : styles.chatMessageTimeOther,
+                      ]}
+                    >
+                      {formatTime(message.created_at)}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })
+          )}
+        </ScrollView>
+
+        <View style={styles.chatInputContainer}>
+          <TextInput
+            style={styles.chatInput}
+            value={newMessage}
+            onChangeText={setNewMessage}
+            placeholder="כתוב הודעה..."
+            placeholderTextColor="#94a3b8"
+            multiline
+            textAlign="right"
+            textAlignVertical="top"
+            onSubmitEditing={handleSend}
+            keyboardType="default"
+            returnKeyType="send"
+            enablesReturnKeyAutomatically={true}
+          />
+          <Pressable
+            onPress={handleSend}
+            style={({ pressed }) => [
+              styles.chatSendButton,
+              (!newMessage.trim() || pressed) && styles.chatSendButtonDisabled,
+            ]}
+            disabled={!newMessage.trim()}
+          >
+            <Text style={styles.chatSendButtonText}>שלח</Text>
+          </Pressable>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+// Attendance Screen
+type AttendanceScreenProps = {
+  userName: string;
+  attendanceStatus: {is_clocked_in: boolean; session: any} | null;
+  onStart: () => void;
+  onStop: () => void;
+  onRefresh: () => void;
+  onBack: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+};
+
+function AttendanceScreen({
+  userName,
+  attendanceStatus,
+  onStart,
+  onStop,
+  onRefresh,
+  onBack,
+  safeAreaInsets,
+  statusBar,
+}: AttendanceScreenProps) {
+  const isClockedIn = attendanceStatus?.is_clocked_in || false;
+  const session = attendanceStatus?.session;
+
+  const formatTime = (dateString: string) => {
+    try {
+      const date = new Date(dateString);
+      const hours = date.getHours();
+      const minutes = date.getMinutes();
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    try {
+      const date = new Date(dateString);
+      const day = date.getDate();
+      const month = date.getMonth() + 1;
+      const year = date.getFullYear();
+      return `${day}/${month}/${year}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const calculateDuration = () => {
+    if (!session?.clock_in) return '00:00';
+    try {
+      const start = new Date(session.clock_in);
+      const end = session.clock_out ? new Date(session.clock_out) : new Date();
+      const diffMs = end.getTime() - start.getTime();
+      const hours = Math.floor(diffMs / (1000 * 60 * 60));
+      const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    } catch {
+      return '00:00';
+    }
+  };
+
+  return (
+    <SafeAreaView style={[styles.container, { paddingTop: safeAreaInsets.top }]}>
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable onPress={onBack} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+        <Text style={styles.ordersPageTitle}>שעון נוכחות</Text>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.attendanceScroll}>
+        <View style={styles.attendanceHeader}>
+          <Text style={styles.attendanceUserName}>שלום {userName}</Text>
+          <Text style={styles.attendanceSubtitle}>ניהול שעות עבודה</Text>
+        </View>
+
+        <View style={styles.attendanceStatusCard}>
+          <View style={styles.attendanceStatusHeader}>
+            <View style={[
+              styles.attendanceStatusIndicator,
+              { backgroundColor: isClockedIn ? '#22c55e' : '#94a3b8' }
+            ]}>
+              <Text style={styles.attendanceStatusIndicatorText}>
+                {isClockedIn ? '●' : '○'}
+              </Text>
+            </View>
+            <Text style={styles.attendanceStatusText}>
+              {isClockedIn ? 'פעיל - בעבודה' : 'לא פעיל'}
+            </Text>
+          </View>
+
+          {isClockedIn && session && (
+            <View style={styles.attendanceSessionInfo}>
+              <View style={styles.attendanceInfoRow}>
+                <Text style={styles.attendanceInfoLabel}>התחלה:</Text>
+                <Text style={styles.attendanceInfoValue}>
+                  {formatDate(session.clock_in)} {formatTime(session.clock_in)}
+                </Text>
+              </View>
+              <View style={styles.attendanceInfoRow}>
+                <Text style={styles.attendanceInfoLabel}>משך זמן:</Text>
+                <Text style={styles.attendanceInfoValue}>{calculateDuration()}</Text>
+              </View>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.attendanceActions}>
+          {!isClockedIn ? (
+            <Pressable
+              style={[styles.attendanceButton, styles.attendanceButtonStart]}
+              onPress={onStart}
+            >
+              <Text style={styles.attendanceButtonIcon}>▶</Text>
+              <Text style={styles.attendanceButtonText}>התחל עבודה</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              style={[styles.attendanceButton, styles.attendanceButtonStop]}
+              onPress={onStop}
+            >
+              <Text style={styles.attendanceButtonIcon}>⏹</Text>
+              <Text style={styles.attendanceButtonText}>סיים עבודה</Text>
+            </Pressable>
+          )}
+          
+          <Pressable
+            style={[styles.attendanceButton, styles.attendanceButtonRefresh]}
+            onPress={onRefresh}
+          >
+            <Text style={styles.attendanceButtonText}>רענן</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
 
 type NewMaintenanceTaskScreenProps = {
   unit: MaintenanceUnit;
@@ -4815,6 +7686,474 @@ const styles = StyleSheet.create({
   modalButtonGhostText: {
     color: '#0f172a',
     fontWeight: '800',
+  },
+  // Chat Screen Styles
+  chatContainer: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  chatMessagesList: {
+    flex: 1,
+  },
+  chatMessagesContent: {
+    padding: 16,
+    gap: 12,
+  },
+  chatEmptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
+  },
+  chatEmptyText: {
+    fontSize: 18,
+    color: '#64748b',
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  chatEmptySubtext: {
+    fontSize: 14,
+    color: '#94a3b8',
+  },
+  chatMessageContainer: {
+    marginBottom: 8,
+    alignItems: 'flex-end',
+  },
+  chatMessageOwn: {
+    alignItems: 'flex-start',
+  },
+  chatMessageSender: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+    marginBottom: 4,
+    marginRight: 8,
+  },
+  chatMessageBubble: {
+    maxWidth: '75%',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderTopRightRadius: 4,
+  },
+  chatMessageBubbleOwn: {
+    backgroundColor: '#0ea5e9',
+    borderTopRightRadius: 16,
+    borderTopLeftRadius: 4,
+  },
+  chatMessageBubbleOther: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  chatMessageText: {
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  chatMessageTextOwn: {
+    color: '#fff',
+  },
+  chatMessageTextOther: {
+    color: '#0f172a',
+  },
+  chatMessageTime: {
+    fontSize: 11,
+    marginTop: 4,
+  },
+  chatMessageTimeOwn: {
+    color: 'rgba(255, 255, 255, 0.8)',
+  },
+  chatMessageTimeOther: {
+    color: '#94a3b8',
+  },
+  chatInputContainer: {
+    flexDirection: 'row-reverse',
+    padding: 12,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    alignItems: 'flex-end',
+    gap: 10,
+  },
+  chatInput: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 15,
+    maxHeight: 100,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  chatSendButton: {
+    backgroundColor: '#0ea5e9',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    minWidth: 70,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatSendButtonDisabled: {
+    backgroundColor: '#cbd5e1',
+    opacity: 0.6,
+  },
+  chatSendButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  // Attendance Screen Styles
+  attendanceScroll: {
+    padding: 16,
+    gap: 20,
+  },
+  attendanceHeader: {
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  attendanceUserName: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  attendanceSubtitle: {
+    fontSize: 16,
+    color: '#64748b',
+  },
+  attendanceStatusCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  attendanceStatusHeader: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 16,
+  },
+  attendanceStatusIndicator: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  attendanceStatusIndicatorText: {
+    color: '#fff',
+    fontSize: 10,
+  },
+  attendanceStatusText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  attendanceSessionInfo: {
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    gap: 12,
+  },
+  attendanceInfoRow: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  attendanceInfoLabel: {
+    fontSize: 14,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  attendanceInfoValue: {
+    fontSize: 16,
+    color: '#0f172a',
+    fontWeight: '700',
+  },
+  attendanceActions: {
+    gap: 12,
+  },
+  attendanceButton: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    gap: 12,
+  },
+  attendanceButtonStart: {
+    backgroundColor: '#22c55e',
+  },
+  attendanceButtonStop: {
+    backgroundColor: '#ef4444',
+  },
+  attendanceButtonRefresh: {
+    backgroundColor: '#64748b',
+  },
+  attendanceButtonIcon: {
+    fontSize: 20,
+    color: '#fff',
+  },
+  attendanceButtonText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  // Warehouse Menu Styles
+  warehouseMenuOptions: {
+    gap: 16,
+    marginTop: 24,
+  },
+  warehouseMenuOption: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  warehouseMenuOptionIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 12,
+    backgroundColor: '#f1f5f9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 16,
+  },
+  warehouseMenuOptionIconText: {
+    fontSize: 28,
+  },
+  warehouseMenuOptionContent: {
+    flex: 1,
+  },
+  warehouseMenuOptionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  warehouseMenuOptionSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
+  },
+  warehouseMenuOptionArrow: {
+    fontSize: 24,
+    color: '#94a3b8',
+    marginRight: 8,
+  },
+  // Warehouse Inventory Styles
+  warehouseList: {
+    gap: 12,
+  },
+  warehouseCard: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  warehouseCardIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#f1f5f9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 12,
+  },
+  warehouseCardIconText: {
+    fontSize: 24,
+  },
+  warehouseCardContent: {
+    flex: 1,
+  },
+  warehouseCardName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  warehouseCardLocation: {
+    fontSize: 14,
+    color: '#64748b',
+  },
+  warehouseCardArrow: {
+    fontSize: 24,
+    color: '#94a3b8',
+    marginRight: 8,
+  },
+  warehouseItemsList: {
+    gap: 12,
+  },
+  warehouseItemCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  warehouseItemInfo: {
+    marginBottom: 12,
+  },
+  warehouseItemName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  warehouseItemUnit: {
+    fontSize: 14,
+    color: '#64748b',
+  },
+  warehouseItemActions: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  warehouseItemQuantity: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  warehouseItemEditButton: {
+    backgroundColor: '#3b82f6',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  warehouseItemEditButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  warehouseItemEdit: {
+    flexDirection: 'row-reverse',
+    gap: 8,
+    alignItems: 'center',
+  },
+  warehouseItemQuantityInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    backgroundColor: '#fff',
+  },
+  warehouseItemSaveButton: {
+    backgroundColor: '#22c55e',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  warehouseItemSaveButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  warehouseItemCancelButton: {
+    backgroundColor: '#ef4444',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  warehouseItemCancelButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  formSection: {
+    gap: 16,
+    marginBottom: 24,
+  },
+  formLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0f172a',
+    marginBottom: 8,
+  },
+  formInput: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 16,
+    backgroundColor: '#fff',
+  },
+  formHint: {
+    fontSize: 14,
+    color: '#64748b',
+    marginTop: -8,
+  },
+  formSelect: {
+    gap: 8,
+  },
+  formSelectOption: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    padding: 16,
+    backgroundColor: '#fff',
+  },
+  formSelectOptionSelected: {
+    borderColor: '#3b82f6',
+    backgroundColor: '#eff6ff',
+  },
+  formSelectOptionText: {
+    fontSize: 16,
+    color: '#0f172a',
+  },
+  formSelectOptionTextSelected: {
+    color: '#3b82f6',
+    fontWeight: '600',
+  },
+  formActions: {
+    gap: 12,
+  },
+  formButton: {
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  formButtonPrimary: {
+    backgroundColor: '#3b82f6',
+  },
+  formButtonPrimaryText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  formButtonSecondary: {
+    backgroundColor: '#f1f5f9',
+  },
+  formButtonSecondaryText: {
+    color: '#64748b',
+    fontSize: 18,
+    fontWeight: '600',
   },
 });
 
