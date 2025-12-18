@@ -18,6 +18,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { launchImageLibrary } from 'react-native-image-picker';
 import {
   SafeAreaProvider,
   SafeAreaView,
@@ -88,7 +89,17 @@ type InventoryOrder = {
 };
 
 type MaintenanceStatus = 'פתוח' | 'בטיפול' | 'סגור';
-type MaintenancePriority = 'נמוך' | 'בינוני' | 'גבוה' | 'דחוף';
+
+type SystemUser = {
+  id: string;
+  username: string;
+};
+
+type SelectedMedia = {
+  uri: string;
+  type: string;
+  name: string;
+};
 
 type MaintenanceTask = {
   id: string;
@@ -96,11 +107,10 @@ type MaintenanceTask = {
   title: string;
   description: string;
   status: MaintenanceStatus;
-  priority: MaintenancePriority;
   createdDate: string;
   assignedTo?: string;
   imageUri?: string;
-  category: string;
+  media?: SelectedMedia | null;
 };
 
 type MaintenanceUnit = {
@@ -265,6 +275,8 @@ function AppContent() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [userName, setUserName] = useState<string | null>(null);
+  const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
+  const [systemUsersLoaded, setSystemUsersLoaded] = useState(false);
   const [orders, setOrders] = useState<Order[]>(initialOrders);
   const [screen, setScreen] = useState<Screen>('home');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -288,6 +300,33 @@ function AppContent() {
   const statusBarStyle = screen === 'home' ? 'light-content' : 'dark-content';
   const statusBar = <StatusBar barStyle={statusBarStyle} />;
 
+  const systemUserNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    (systemUsers || []).forEach(u => {
+      if (u?.id) m.set(u.id.toString(), (u.username || '').toString());
+    });
+    return m;
+  }, [systemUsers]);
+
+  const resolveAssigneeLabel = (assignedTo?: string | null) => {
+    const raw = (assignedTo ?? '').toString().trim();
+    if (!raw) return '';
+    return systemUserNameById.get(raw) || raw;
+  };
+
+  const loadSystemUsers = async (force = false) => {
+    if (systemUsersLoaded && !force) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/users`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setSystemUsers(Array.isArray(data) ? data : []);
+      setSystemUsersLoaded(true);
+    } catch (err) {
+      console.warn('Error loading system users', err);
+    }
+  };
+
   const inspectionMissionsEffective = useMemo(() => {
     return (inspectionMissions || []).map(m => ({
       ...m,
@@ -296,6 +335,12 @@ function AppContent() {
       departureDate: normalizeISODate(m.departureDate),
     }));
   }, [inspectionMissions]);
+
+  useEffect(() => {
+    if (screen === 'newMaintenanceTask' || screen === 'maintenanceTasks' || screen === 'maintenanceTaskDetail') {
+      loadSystemUsers(false);
+    }
+  }, [screen]);
 
   const totals = useMemo(() => {
     const totalPaid = orders.reduce((sum, o) => sum + o.paidAmount, 0);
@@ -604,11 +649,10 @@ function AppContent() {
           title: (t.title || '').toString(),
           description: (t.description || '').toString(),
           status: (t.status || 'פתוח') as MaintenanceStatus,
-          priority: (t.priority || 'בינוני') as MaintenancePriority,
           createdDate: (t.created_date || t.createdDate || new Date().toISOString().split('T')[0]).toString(),
           assignedTo: (t.assigned_to || t.assignedTo || undefined)?.toString(),
           imageUri: (t.image_uri || t.imageUri || undefined)?.toString(),
-          category: (t.category || 'אחר').toString(),
+          media: null,
         };
 
         unit.tasks.push(task);
@@ -1496,6 +1540,7 @@ function AppContent() {
     return (
       <MaintenanceTasksScreen
         unit={unit}
+        resolveAssignee={resolveAssigneeLabel}
         onSelectTask={(taskId) => {
           setSelectedMaintenanceTaskId(taskId);
           setScreen('maintenanceTaskDetail');
@@ -1531,6 +1576,7 @@ function AppContent() {
         inventoryOrders={inventoryOrders}
         maintenanceUnits={maintenanceUnits}
         maintenanceTasksReport={maintenanceTasksReport}
+        resolveAssignee={resolveAssigneeLabel}
         attendanceStatus={attendanceStatus}
         attendanceLogsReport={attendanceLogsReport}
         reportsSummary={reportsSummary}
@@ -1582,16 +1628,15 @@ function AppContent() {
       <MaintenanceTaskDetailScreen
         unit={unit}
         task={task}
+        resolveAssignee={resolveAssigneeLabel}
         onUpdateTask={async (taskId, updates) => {
           try {
             const payload: any = {};
             if (updates.status) payload.status = updates.status;
-            if (updates.priority) payload.priority = updates.priority;
             if (updates.assignedTo !== undefined) payload.assigned_to = updates.assignedTo;
             if (updates.imageUri !== undefined) payload.image_uri = updates.imageUri;
             if (updates.title) payload.title = updates.title;
             if (updates.description) payload.description = updates.description;
-            if (updates.category) payload.category = updates.category;
 
             const res = await fetch(`${API_BASE_URL}/maintenance/tasks/${encodeURIComponent(taskId)}`, {
               method: 'PATCH',
@@ -1623,24 +1668,31 @@ function AppContent() {
     return (
       <NewMaintenanceTaskScreen
         unit={unit}
+        systemUsers={systemUsers}
+        onRefreshUsers={() => loadSystemUsers(true)}
         onSave={async (task) => {
           try {
-            const payload = {
-              id: task.id,
-              unit_id: unit.id,
-              title: task.title,
-              description: task.description,
-              status: task.status,
-              priority: task.priority,
-              created_date: task.createdDate,
-              assigned_to: task.assignedTo || userName || null,
-              image_uri: task.imageUri || null,
-              category: task.category,
-            };
             const res = await fetch(`${API_BASE_URL}/maintenance/tasks`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
+              body: (() => {
+                const form = new FormData();
+                form.append('id', task.id);
+                form.append('unit_id', unit.id);
+                form.append('title', task.title);
+                form.append('description', task.description);
+                form.append('status', task.status);
+                form.append('created_date', task.createdDate);
+                if (task.assignedTo) form.append('assigned_to', task.assignedTo);
+                if (task.media?.uri) {
+                  form.append('media', {
+                    // @ts-expect-error React Native FormData file
+                    uri: task.media.uri,
+                    type: task.media.type,
+                    name: task.media.name,
+                  });
+                }
+                return form;
+              })(),
             });
             if (!res.ok) {
               const errText = await res.text().catch(() => '');
@@ -3609,6 +3661,7 @@ type MaintenanceScreenProps = {
 
 type MaintenanceTasksScreenProps = {
   unit: MaintenanceUnit;
+  resolveAssignee: (assignedTo?: string | null) => string;
   onSelectTask: (taskId: string) => void;
   onNewTask: () => void;
   onBack: () => void;
@@ -3619,6 +3672,7 @@ type MaintenanceTasksScreenProps = {
 type MaintenanceTaskDetailScreenProps = {
   unit: MaintenanceUnit;
   task: MaintenanceTask;
+  resolveAssignee: (assignedTo?: string | null) => string;
   onUpdateTask: (taskId: string, updates: Partial<MaintenanceTask>) => void;
   onBack: () => void;
   safeAreaInsets: { top: number };
@@ -3634,6 +3688,7 @@ type ReportsScreenProps = {
   inventoryOrders: InventoryOrder[];
   maintenanceUnits: MaintenanceUnit[];
   maintenanceTasksReport: Array<any>;
+  resolveAssignee: (assignedTo?: string | null) => string;
   attendanceStatus: {is_clocked_in: boolean; session: any} | null;
   attendanceLogsReport: Array<any>;
   reportsSummary: {totalRevenue: number; totalPaid: number; totalExpenses: number} | null;
@@ -3657,6 +3712,7 @@ function ReportsScreen({
   inventoryOrders,
   maintenanceUnits,
   maintenanceTasksReport,
+  resolveAssignee,
   attendanceStatus,
   attendanceLogsReport,
   reportsSummary,
@@ -3688,6 +3744,22 @@ function ReportsScreen({
 
   const formatMoney = (v: number) => `₪${(v || 0).toLocaleString('he-IL')}`;
   const formatPct = (v: number) => `${Math.round(v || 0)}%`;
+  const orderStatusBadge = (status: OrderStatus) => {
+    switch (status) {
+      case 'חדש':
+        return { bg: '#fef3c7', border: '#fbbf24', text: '#92400e' };
+      case 'באישור':
+        return { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af' };
+      case 'שולם חלקית':
+        return { bg: '#fce7f3', border: '#ec4899', text: '#9f1239' };
+      case 'שולם':
+        return { bg: '#d1fae5', border: '#10b981', text: '#065f46' };
+      case 'בוטל':
+        return { bg: '#fee2e2', border: '#ef4444', text: '#991b1b' };
+      default:
+        return { bg: '#f3f4f6', border: '#9ca3af', text: '#374151' };
+    }
+  };
   const msDay = 24 * 60 * 60 * 1000;
   const safeDate = (s: string) => {
     const d = new Date(s);
@@ -4153,17 +4225,18 @@ function ReportsScreen({
       .slice(0, 10);
   }, [maintenanceTasksEffective]);
 
-  const maintenanceByPriority = useMemo(() => {
+  const maintenanceByAssignee = useMemo(() => {
     const map = new Map<string, number>();
     maintenanceTasksEffective.forEach((t: any) => {
-      const p = (t.priority || 'לא צוין').toString();
-      map.set(p, (map.get(p) || 0) + 1);
+      const raw = (t.assigned_to || t.assignedTo || '').toString().trim();
+      const label = raw ? resolveAssignee(raw) : 'לא משויך';
+      map.set(label, (map.get(label) || 0) + 1);
     });
     return Array.from(map.entries())
-      .map(([priority, count]) => ({ priority, count }))
+      .map(([assignee, count]) => ({ assignee, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 8);
-  }, [maintenanceTasksEffective]);
+  }, [maintenanceTasksEffective, resolveAssignee]);
 
   const maintenanceByUnit = useMemo(() => {
     const map = new Map<string, { unit: string; total: number; open: number }>();
@@ -4528,9 +4601,32 @@ function ReportsScreen({
             {activeReport === 'orders' ? (
             <View style={{ marginTop: 10 }}>
               <Text style={styles.label}>כל ההזמנות לפי יחידת נופש</Text>
-              <Text style={styles.progressNote}>
-                סה״כ הזמנות: {orders.length} | חדש: {ordersByStatus['חדש'] || 0} | באישור: {ordersByStatus['באישור'] || 0} | שולם חלקית: {ordersByStatus['שולם חלקית'] || 0} | שולם: {ordersByStatus['שולם'] || 0} | בוטל: {ordersByStatus['בוטל'] || 0}
-              </Text>
+              <View style={styles.reportUnitKpiGrid}>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>סה״כ הזמנות</Text>
+                  <Text style={styles.reportUnitKpiValue}>{orders.length}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>חדש</Text>
+                  <Text style={styles.reportUnitKpiValue}>{ordersByStatus['חדש'] || 0}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>באישור</Text>
+                  <Text style={styles.reportUnitKpiValue}>{ordersByStatus['באישור'] || 0}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>שולם חלקית</Text>
+                  <Text style={styles.reportUnitKpiValue}>{ordersByStatus['שולם חלקית'] || 0}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>שולם</Text>
+                  <Text style={styles.reportUnitKpiValue}>{ordersByStatus['שולם'] || 0}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>בוטל</Text>
+                  <Text style={styles.reportUnitKpiValue}>{ordersByStatus['בוטל'] || 0}</Text>
+                </View>
+              </View>
 
               {ordersByUnitReport.length === 0 ? (
                 <Text style={styles.progressNote}>אין הזמנות</Text>
@@ -4538,18 +4634,50 @@ function ReportsScreen({
                 ordersByUnitReport.map(u => (
                   <View key={u.unit} style={[styles.card, { marginTop: 12, borderColor: '#bae6fd' }]}>
                     <Text style={[styles.title, { fontSize: 18 }]}>{u.unit}</Text>
-                    <Text style={styles.progressNote}>
-                      הזמנות: {u.orders.length} | הכנסות: {formatMoney(u.totalRevenue)} | שולם: {formatMoney(u.totalPaid)} | יתרה: {formatMoney(u.totalOutstanding)}
-                    </Text>
-                    <Text style={styles.progressNote}>
-                      סטטוסים: חדש {u.statusCounts['חדש'] || 0} | באישור {u.statusCounts['באישור'] || 0} | שולם חלקית {u.statusCounts['שולם חלקית'] || 0} | שולם {u.statusCounts['שולם'] || 0} | בוטל {u.statusCounts['בוטל'] || 0}
-                    </Text>
-                    <View style={{ marginTop: 8 }}>
-                      {u.orders.map(o => (
-                        <Text key={o.id} style={styles.progressNote}>
-                          #{o.id} | {o.arrivalDate}–{o.departureDate} | {o.guestName || 'ללא שם'} | סטטוס: {o.status} | אורחים: {o.guestsCount} | {formatMoney(o.paidAmount)}/{formatMoney(o.totalAmount)} (יתרה {formatMoney(o.remaining)}) | {o.paymentMethod || 'לא צוין'}
-                        </Text>
-                      ))}
+                    <View style={styles.reportUnitKpiGrid}>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>הזמנות</Text>
+                        <Text style={styles.reportUnitKpiValue}>{u.orders.length}</Text>
+                      </View>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>הכנסות</Text>
+                        <Text style={styles.reportUnitKpiValue}>{formatMoney(u.totalRevenue)}</Text>
+                      </View>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>שולם</Text>
+                        <Text style={styles.reportUnitKpiValue}>{formatMoney(u.totalPaid)}</Text>
+                      </View>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>יתרה</Text>
+                        <Text style={styles.reportUnitKpiValue}>{formatMoney(u.totalOutstanding)}</Text>
+                      </View>
+                    </View>
+
+                    <View style={{ marginTop: 10 }}>
+                      {u.orders.map(o => {
+                        return (
+                          <View key={o.id} style={styles.reportOrderMiniCard}>
+                            <View style={styles.reportOrderMiniHeader}>
+                              <Text style={styles.reportOrderId}>#{o.id}</Text>
+                            </View>
+
+                            <Text style={styles.reportOrderLine}>סטטוס: {o.status}</Text>
+                            <Text style={styles.reportOrderLine}>
+                              תאריכים: {o.arrivalDate}–{o.departureDate}
+                            </Text>
+                            <Text style={styles.reportOrderLine}>
+                              אורח: {o.guestName || 'ללא שם'} • אורחים: {o.guestsCount}
+                            </Text>
+                            <Text style={styles.reportOrderLine}>
+                              תשלום: {formatMoney(o.paidAmount)}/{formatMoney(o.totalAmount)} • יתרה:{' '}
+                              {formatMoney(o.remaining)}
+                            </Text>
+                            <Text style={styles.reportOrderLine}>
+                              אופן תשלום: {o.paymentMethod || 'לא צוין'}
+                            </Text>
+                          </View>
+                        );
+                      })}
                     </View>
                   </View>
                 ))
@@ -4560,9 +4688,28 @@ function ReportsScreen({
             {activeReport === 'inspections' ? (
             <View style={{ marginTop: 10 }}>
               <Text style={styles.label}>כל הביקורות לפי יחידת נופש</Text>
-              <Text style={styles.progressNote}>
-                סה״כ: {inspectionsTotal} | טרם הגיע: {inspectionsNotYet} | דורש היום: {inspectionsToday} | עבר: {inspectionsOverdue} | הושלמה: {inspectionsDone}
-              </Text>
+              <View style={styles.reportUnitKpiGrid}>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>סה״כ</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inspectionsTotal}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>טרם הגיע</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inspectionsNotYet}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>דורש היום</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inspectionsToday}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>עבר</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inspectionsOverdue}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>הושלמה</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inspectionsDone}</Text>
+                </View>
+              </View>
 
               {inspectionsByUnit.length === 0 ? (
                 <Text style={styles.progressNote}>אין ביקורות</Text>
@@ -4575,9 +4722,15 @@ function ReportsScreen({
                     </Text>
                     <View style={{ marginTop: 8 }}>
                       {u.missions.map(m => (
-                        <Text key={m.id} style={styles.progressNote}>
-                          {m.departureDate} | סטטוס: {m.status} | משימות: {m.doneTasks}/{m.totalTasks} ({m.completionPct}%)
-                        </Text>
+                        <View key={m.id} style={styles.reportOrderMiniCard}>
+                          <View style={styles.reportOrderMiniHeader}>
+                            <Text style={styles.reportOrderId}>{m.departureDate}</Text>
+                          </View>
+                          <Text style={styles.reportOrderLine}>סטטוס: {m.status}</Text>
+                          <Text style={styles.reportOrderLine}>
+                            משימות: {m.doneTasks}/{m.totalTasks} ({m.completionPct}%)
+                          </Text>
+                        </View>
                       ))}
                     </View>
                   </View>
@@ -4589,9 +4742,20 @@ function ReportsScreen({
             {activeReport === 'warehouse' ? (
             <View style={{ marginTop: 10 }}>
               <Text style={styles.label}>חלק 1: מלאי – כמה יש מכל מוצר בכל מחסן</Text>
-              <Text style={styles.progressNote}>
-                מחסנים: {warehouses.length} | פריטים (שורות): {warehouseItemsCount} | כמות כוללת: {warehouseTotalQty}
-              </Text>
+              <View style={styles.reportUnitKpiGrid}>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>מחסנים</Text>
+                  <Text style={styles.reportUnitKpiValue}>{warehouses.length}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>פריטים (שורות)</Text>
+                  <Text style={styles.reportUnitKpiValue}>{warehouseItemsCount}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>כמות כוללת</Text>
+                  <Text style={styles.reportUnitKpiValue}>{warehouseTotalQty}</Text>
+                </View>
+              </View>
 
               <Pressable
                 onPress={() => setShowAllWarehouseStock(v => !v)}
@@ -4606,9 +4770,16 @@ function ReportsScreen({
                 warehouseInventoryByWarehouse.map(w => (
                   <View key={w.warehouseId} style={[styles.card, { marginTop: 12, borderColor: '#ddd6fe' }]}>
                     <Text style={[styles.title, { fontSize: 18 }]}>{w.warehouseName}</Text>
-                    <Text style={styles.progressNote}>
-                      כמות כוללת: {w.totalQty} | מספר מוצרים: {w.items.length}
-                    </Text>
+                    <View style={styles.reportUnitKpiGrid}>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>כמות כוללת</Text>
+                        <Text style={styles.reportUnitKpiValue}>{w.totalQty}</Text>
+                      </View>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>מספר מוצרים</Text>
+                        <Text style={styles.reportUnitKpiValue}>{w.items.length}</Text>
+                      </View>
+                    </View>
                     <View style={{ marginTop: 8 }}>
                       {(showAllWarehouseStock ? w.items : w.items.slice(0, 25)).map(it => (
                         <Text key={`${w.warehouseId}-${it.name}-${it.unit}`} style={styles.progressNote}>
@@ -4626,9 +4797,32 @@ function ReportsScreen({
               )}
 
               <Text style={[styles.label, { marginTop: 16 }]}>חלק 2: הזמנות – סטטוס ותוכן</Text>
-              <Text style={styles.progressNote}>
-                סה״כ הזמנות: {inventoryOrders.length} | ממתין לאישור: {inventoryOrdersByStatus['ממתין לאישור'] || 0} | מאושר: {inventoryOrdersByStatus['מאושר'] || 0} | בהזמנה: {inventoryOrdersByStatus['בהזמנה'] || 0} | התקבל: {inventoryOrdersByStatus['התקבל'] || 0} | בוטל: {inventoryOrdersByStatus['בוטל'] || 0}
-              </Text>
+              <View style={styles.reportUnitKpiGrid}>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>סה״כ הזמנות</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inventoryOrders.length}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>ממתין לאישור</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['ממתין לאישור'] || 0}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>מאושר</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['מאושר'] || 0}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>בהזמנה</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['בהזמנה'] || 0}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>התקבל</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['התקבל'] || 0}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>בוטל</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['בוטל'] || 0}</Text>
+                </View>
+              </View>
 
               <Pressable
                 onPress={() => setShowAllWarehouseOrders(v => !v)}
@@ -4647,15 +4841,17 @@ function ReportsScreen({
                     <Text style={styles.progressNote}>
                       תוכן: {o.itemName} — {o.quantity} {o.unit}
                     </Text>
-                    <Text style={styles.progressNote}>
-                      סוג: {o.orderType}
-                      {o.orderedBy ? ` | הוזמן ע\"י: ${o.orderedBy}` : ''}
-                      {o.unitNumber ? ` | יחידה: ${o.unitNumber}` : ''}
-                    </Text>
-                    <Text style={styles.progressNote}>
-                      תאריך הזמנה: {o.orderDate || '-'}
-                      {o.deliveryDate ? ` | תאריך אספקה: ${o.deliveryDate}` : ''}
-                    </Text>
+                    <Text style={styles.progressNote}>סוג: {o.orderType}</Text>
+                    {o.orderedBy ? (
+                      <Text style={styles.progressNote}>הוזמן ע״י: {o.orderedBy}</Text>
+                    ) : null}
+                    {o.unitNumber ? (
+                      <Text style={styles.progressNote}>יחידה: {o.unitNumber}</Text>
+                    ) : null}
+                    <Text style={styles.progressNote}>תאריך הזמנה: {o.orderDate || '-'}</Text>
+                    {o.deliveryDate ? (
+                      <Text style={styles.progressNote}>תאריך אספקה: {o.deliveryDate}</Text>
+                    ) : null}
                   </View>
                 ))
               )}
@@ -4665,17 +4861,32 @@ function ReportsScreen({
             {activeReport === 'maintenance' ? (
             <View style={{ marginTop: 10 }}>
               <Text style={styles.label}>סיכום</Text>
-              <Text style={styles.progressNote}>
-                פתוח: {maintenanceOpen} | בטיפול: {maintenanceInProgress} | סגור: {maintenanceClosed} | סה״כ: {maintenanceTotal}
-              </Text>
+              <View style={styles.reportUnitKpiGrid}>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>פתוח</Text>
+                  <Text style={styles.reportUnitKpiValue}>{maintenanceOpen}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>בטיפול</Text>
+                  <Text style={styles.reportUnitKpiValue}>{maintenanceInProgress}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>סגור</Text>
+                  <Text style={styles.reportUnitKpiValue}>{maintenanceClosed}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>סה״כ</Text>
+                  <Text style={styles.reportUnitKpiValue}>{maintenanceTotal}</Text>
+                </View>
+              </View>
 
-              <Text style={[styles.label, { marginTop: 12 }]}>התפלגות לפי עדיפות (Top 8)</Text>
-              {maintenanceByPriority.length === 0 ? (
+              <Text style={[styles.label, { marginTop: 12 }]}>התפלגות לפי עובד (Top 8)</Text>
+              {maintenanceByAssignee.length === 0 ? (
                 <Text style={styles.progressNote}>אין נתונים</Text>
               ) : (
-                maintenanceByPriority.map(p => (
-                  <Text key={p.priority} style={styles.progressNote}>
-                    {p.priority}: {p.count}
+                maintenanceByAssignee.map(p => (
+                  <Text key={p.assignee} style={styles.progressNote}>
+                    {p.assignee}: {p.count}
                   </Text>
                 ))
               )}
@@ -4686,7 +4897,7 @@ function ReportsScreen({
               ) : (
                 maintenanceByUnit.map(u => (
                   <Text key={u.unit} style={styles.progressNote}>
-                    {u.unit}: פתוחות {u.open} | סה״כ {u.total}
+                    {u.unit}: פתוחות {u.open}, סה״כ {u.total}
                   </Text>
                 ))
               )}
@@ -4695,11 +4906,22 @@ function ReportsScreen({
               {maintenanceTopOpen.length === 0 ? (
                 <Text style={styles.progressNote}>אין משימות פתוחות</Text>
               ) : (
-                maintenanceTopOpen.map((t: any) => (
-                  <Text key={t.id} style={styles.progressNote}>
-                    {t.title || 'משימה'} | סטטוס: {normalizeMaintenanceStatus(t.status)} | עדיפות: {t.priority || '-'}
-                  </Text>
-                ))
+                maintenanceTopOpen.map((t: any) => {
+                  const assigned = (t.assigned_to || t.assignedTo || '').toString();
+                  return (
+                    <View key={t.id} style={styles.reportOrderMiniCard}>
+                      <View style={styles.reportOrderMiniHeader}>
+                        <Text style={styles.reportOrderId}>{t.title || 'משימה'}</Text>
+                      </View>
+                      <Text style={styles.reportOrderLine}>סטטוס: {normalizeMaintenanceStatus(t.status)}</Text>
+                      {assigned ? (
+                        <Text style={styles.reportOrderLine}>מוקצה ל: {resolveAssignee(assigned)}</Text>
+                      ) : (
+                        <Text style={styles.reportOrderLine}>מוקצה ל: לא משויך</Text>
+                      )}
+                    </View>
+                  );
+                })
               )}
 
               <Text style={[styles.label, { marginTop: 12 }]}>משימות פתוחות הכי ישנות (Top 10)</Text>
@@ -4707,9 +4929,13 @@ function ReportsScreen({
                 <Text style={styles.progressNote}>אין נתונים</Text>
               ) : (
                 maintenanceOldOpen.map((t: any) => (
-                  <Text key={t.id} style={styles.progressNote}>
-                    {t.title || 'משימה'} | {t._ageDays || 0} ימים | סטטוס: {normalizeMaintenanceStatus(t.status)}
-                  </Text>
+                  <View key={t.id} style={styles.reportOrderMiniCard}>
+                    <View style={styles.reportOrderMiniHeader}>
+                      <Text style={styles.reportOrderId}>{t.title || 'משימה'}</Text>
+                    </View>
+                    <Text style={styles.reportOrderLine}>סטטוס: {normalizeMaintenanceStatus(t.status)}</Text>
+                    <Text style={styles.reportOrderLine}>גיל: {t._ageDays || 0} ימים</Text>
+                  </View>
                 ))
               )}
 
@@ -4720,14 +4946,39 @@ function ReportsScreen({
                 maintenanceTasksByUnit.map(u => (
                   <View key={u.unitId} style={[styles.card, { marginTop: 12, borderColor: '#bbf7d0' }]}>
                     <Text style={[styles.title, { fontSize: 18 }]}>{u.unitName}</Text>
-                    <Text style={styles.progressNote}>
-                      פתוח: {u.open} | בטיפול: {u.inProgress} | סגור: {u.closed} | סה״כ: {u.total}
-                    </Text>
+                    <View style={styles.reportUnitKpiGrid}>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>פתוח</Text>
+                        <Text style={styles.reportUnitKpiValue}>{u.open}</Text>
+                      </View>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>בטיפול</Text>
+                        <Text style={styles.reportUnitKpiValue}>{u.inProgress}</Text>
+                      </View>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>סגור</Text>
+                        <Text style={styles.reportUnitKpiValue}>{u.closed}</Text>
+                      </View>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>סה״כ</Text>
+                        <Text style={styles.reportUnitKpiValue}>{u.total}</Text>
+                      </View>
+                    </View>
                     <View style={{ marginTop: 8 }}>
                       {u.tasks.map((t: any) => (
-                        <Text key={t.id} style={styles.progressNote}>
-                          {t.title || 'משימה'} | סטטוס: {normalizeMaintenanceStatus(t.status)} | עדיפות: {t.priority || '-'}
-                        </Text>
+                        <View key={t.id} style={styles.reportOrderMiniCard}>
+                          <View style={styles.reportOrderMiniHeader}>
+                            <Text style={styles.reportOrderId}>{t.title || 'משימה'}</Text>
+                          </View>
+                          <Text style={styles.reportOrderLine}>סטטוס: {normalizeMaintenanceStatus(t.status)}</Text>
+                          {(t.assigned_to || t.assignedTo) ? (
+                            <Text style={styles.reportOrderLine}>
+                              מוקצה ל: {resolveAssignee((t.assigned_to || t.assignedTo).toString())}
+                            </Text>
+                          ) : (
+                            <Text style={styles.reportOrderLine}>מוקצה ל: לא משויך</Text>
+                          )}
+                        </View>
                       ))}
                     </View>
                   </View>
@@ -4739,9 +4990,16 @@ function ReportsScreen({
             {activeReport === 'attendance' ? (
             <View style={{ marginTop: 10 }}>
               <Text style={styles.label}>סטטוס עכשיו</Text>
-              <Text style={styles.progressNote}>
-                {isClockedIn ? 'בעבודה' : 'לא בעבודה'} | עובדים מחוברים: {currentlyClockedInEmployees.length}
-              </Text>
+              <View style={styles.reportUnitKpiGrid}>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>סטטוס</Text>
+                  <Text style={styles.reportUnitKpiValue}>{isClockedIn ? 'בעבודה' : 'לא בעבודה'}</Text>
+                </View>
+                <View style={styles.reportUnitKpiItem}>
+                  <Text style={styles.reportUnitKpiLabel}>עובדים מחוברים</Text>
+                  <Text style={styles.reportUnitKpiValue}>{currentlyClockedInEmployees.length}</Text>
+                </View>
+              </View>
               {currentlyClockedInEmployees.length > 0 ? (
                 <Text style={styles.progressNote}>
                   עובדים פעילים: {currentlyClockedInEmployees.join(', ')}
@@ -4775,9 +5033,16 @@ function ReportsScreen({
                 <Text style={styles.progressNote}>אין סשנים</Text>
               ) : (
                 attendanceRecentSessions.map(s => (
-                  <Text key={s.id} style={styles.progressNote}>
-                    {s.emp} | {s.day} | {s.timeIn} - {s.timeOut} | {s.durHrs.toFixed(1)} שעות{s.isOpen ? ' (פתוח)' : ''}
-                  </Text>
+                  <View key={s.id} style={styles.reportOrderMiniCard}>
+                    <View style={styles.reportOrderMiniHeader}>
+                      <Text style={styles.reportOrderId}>{s.emp}</Text>
+                    </View>
+                    <Text style={styles.reportOrderLine}>תאריך: {s.day}</Text>
+                    <Text style={styles.reportOrderLine}>שעות: {s.timeIn} - {s.timeOut}</Text>
+                    <Text style={styles.reportOrderLine}>
+                      משך: {s.durHrs.toFixed(1)} שעות{s.isOpen ? ' (פתוח)' : ''}
+                    </Text>
+                  </View>
                 ))
               )}
 
@@ -4788,14 +5053,27 @@ function ReportsScreen({
                 attendancePeriodsByEmployee.map(emp => (
                   <View key={emp.employee} style={[styles.card, { marginTop: 12, borderColor: '#fbcfe8' }]}>
                     <Text style={[styles.title, { fontSize: 18 }]}>{emp.employee}</Text>
-                    <Text style={styles.progressNote}>
-                      סטטוס: {emp.isActive ? 'בעבודה עכשיו' : 'לא בעבודה'} | סך שעות (מהלוגים האחרונים): {emp.totalHours.toFixed(1)}
-                    </Text>
+                    <View style={styles.reportUnitKpiGrid}>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>סטטוס</Text>
+                        <Text style={styles.reportUnitKpiValue}>{emp.isActive ? 'בעבודה עכשיו' : 'לא בעבודה'}</Text>
+                      </View>
+                      <View style={styles.reportUnitKpiItem}>
+                        <Text style={styles.reportUnitKpiLabel}>סך שעות (לוגים אחרונים)</Text>
+                        <Text style={styles.reportUnitKpiValue}>{emp.totalHours.toFixed(1)}</Text>
+                      </View>
+                    </View>
                     <View style={{ marginTop: 8 }}>
                       {emp.sessions.map(s => (
-                        <Text key={s.id} style={styles.progressNote}>
-                          {s.day} | {s.timeIn} - {s.timeOut} | {s.durHrs.toFixed(1)} שעות{s.isOpen ? ' (פתוח)' : ''}
-                        </Text>
+                        <View key={s.id} style={styles.reportOrderMiniCard}>
+                          <View style={styles.reportOrderMiniHeader}>
+                            <Text style={styles.reportOrderId}>{s.day}</Text>
+                          </View>
+                          <Text style={styles.reportOrderLine}>שעות: {s.timeIn} - {s.timeOut}</Text>
+                          <Text style={styles.reportOrderLine}>
+                            משך: {s.durHrs.toFixed(1)} שעות{s.isOpen ? ' (פתוח)' : ''}
+                          </Text>
+                        </View>
                       ))}
                     </View>
                   </View>
@@ -5107,6 +5385,8 @@ function AttendanceScreen({
 type NewMaintenanceTaskScreenProps = {
   unit: MaintenanceUnit;
   onSave: (task: MaintenanceTask) => void;
+  systemUsers: SystemUser[];
+  onRefreshUsers: () => void;
   onCancel: () => void;
   safeAreaInsets: { top: number };
   statusBar: React.ReactElement;
@@ -5215,6 +5495,7 @@ function MaintenanceScreen({
 
 function MaintenanceTasksScreen({
   unit,
+  resolveAssignee,
   onSelectTask,
   onNewTask,
   onBack,
@@ -5229,21 +5510,6 @@ function MaintenanceTasksScreen({
         return '#3b82f6';
       case 'סגור':
         return '#22c55e';
-      default:
-        return '#64748b';
-    }
-  };
-
-  const getPriorityColor = (priority: MaintenancePriority) => {
-    switch (priority) {
-      case 'דחוף':
-        return '#ef4444';
-      case 'גבוה':
-        return '#f59e0b';
-      case 'בינוני':
-        return '#3b82f6';
-      case 'נמוך':
-        return '#64748b';
       default:
         return '#64748b';
     }
@@ -5292,15 +5558,13 @@ function MaintenanceTasksScreen({
                   <Text style={styles.taskCardTitle}>{task.title}</Text>
                   <Text style={styles.taskCardDescription}>{task.description}</Text>
                   <View style={styles.taskCardMeta}>
-                    <Text style={styles.taskCardMetaText}>קטגוריה: {task.category}</Text>
-                    <Text style={styles.taskCardMetaText}>•</Text>
                     <Text style={styles.taskCardMetaText}>
                       תאריך: {task.createdDate}
                     </Text>
                   </View>
                   {task.assignedTo && (
                     <Text style={styles.taskCardAssigned}>
-                      מוקצה ל: {task.assignedTo}
+                      מוקצה ל: {resolveAssignee(task.assignedTo)}
                     </Text>
                   )}
                 </View>
@@ -5320,26 +5584,11 @@ function MaintenanceTasksScreen({
                       {task.status}
                     </Text>
                   </View>
-                  <View
-                    style={[
-                      styles.taskPriorityBadge,
-                      { backgroundColor: getPriorityColor(task.priority) + '22' },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.taskPriorityText,
-                        { color: getPriorityColor(task.priority) },
-                      ]}
-                    >
-                      {task.priority}
-                    </Text>
-                  </View>
                 </View>
               </View>
               {task.imageUri && (
                 <View style={styles.taskImageIndicator}>
-                  <Text style={styles.taskImageIndicatorText}>📷 תמונה מצורפת</Text>
+                  <Text style={styles.taskImageIndicatorText}>📎 מדיה מצורפת</Text>
                 </View>
               )}
             </Pressable>
@@ -5353,6 +5602,7 @@ function MaintenanceTasksScreen({
 function MaintenanceTaskDetailScreen({
   unit,
   task,
+  resolveAssignee,
   onUpdateTask,
   onBack,
   safeAreaInsets,
@@ -5366,21 +5616,25 @@ function MaintenanceTaskDetailScreen({
     setShowCloseModal(true);
   };
 
-  const handleCloseModalImageSelect = () => {
-    Alert.alert(
-      'העלאת תמונה',
-      'בחרו תמונה מהגלריה',
-      [
-        { text: 'ביטול', style: 'cancel' },
-        {
-          text: 'בחר תמונה',
-          onPress: () => {
-            const mockImageUri = `file:///close-image-${Date.now()}.jpg`;
-            setCloseModalImageUri(mockImageUri);
-          },
-        },
-      ],
-    );
+  const handleCloseModalImageSelect = async () => {
+    try {
+      const result = await launchImageLibrary({
+        mediaType: 'photo',
+        selectionLimit: 1,
+        includeBase64: true,
+      });
+      if (result.didCancel) return;
+      const asset = result.assets?.[0];
+      const base64 = asset?.base64;
+      const mime = asset?.type || 'image/jpeg';
+      if (!base64) {
+        Alert.alert('שגיאה', 'לא ניתן לקרוא את התמונה שנבחרה');
+        return;
+      }
+      setCloseModalImageUri(`data:${mime};base64,${base64}`);
+    } catch (err: any) {
+      Alert.alert('שגיאה', err?.message || 'לא ניתן לבחור תמונה');
+    }
   };
 
   const handleConfirmClose = () => {
@@ -5402,21 +5656,6 @@ function MaintenanceTaskDetailScreen({
         return '#3b82f6';
       case 'סגור':
         return '#22c55e';
-      default:
-        return '#64748b';
-    }
-  };
-
-  const getPriorityColor = (priority: MaintenancePriority) => {
-    switch (priority) {
-      case 'דחוף':
-        return '#ef4444';
-      case 'גבוה':
-        return '#f59e0b';
-      case 'בינוני':
-        return '#3b82f6';
-      case 'נמוך':
-        return '#64748b';
       default:
         return '#64748b';
     }
@@ -5452,32 +5691,12 @@ function MaintenanceTaskDetailScreen({
                   {task.status}
                 </Text>
               </View>
-              <View
-                style={[
-                  styles.taskPriorityBadge,
-                  { backgroundColor: getPriorityColor(task.priority) + '22' },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.taskPriorityText,
-                    { color: getPriorityColor(task.priority) },
-                  ]}
-                >
-                  {task.priority}
-                </Text>
-              </View>
             </View>
           </View>
 
           <View style={styles.taskDetailSection}>
             <Text style={styles.taskDetailLabel}>יחידה:</Text>
             <Text style={styles.taskDetailValue}>{unit.name}</Text>
-          </View>
-
-          <View style={styles.taskDetailSection}>
-            <Text style={styles.taskDetailLabel}>קטגוריה:</Text>
-            <Text style={styles.taskDetailValue}>{task.category}</Text>
           </View>
 
           <View style={styles.taskDetailSection}>
@@ -5488,7 +5707,7 @@ function MaintenanceTaskDetailScreen({
           {task.assignedTo && (
             <View style={styles.taskDetailSection}>
               <Text style={styles.taskDetailLabel}>מוקצה ל:</Text>
-              <Text style={styles.taskDetailValue}>{task.assignedTo}</Text>
+              <Text style={styles.taskDetailValue}>{resolveAssignee(task.assignedTo)}</Text>
             </View>
           )}
 
@@ -5568,6 +5787,8 @@ function MaintenanceTaskDetailScreen({
 function NewMaintenanceTaskScreen({
   unit,
   onSave,
+  systemUsers,
+  onRefreshUsers,
   onCancel,
   safeAreaInsets,
   statusBar,
@@ -5575,15 +5796,45 @@ function NewMaintenanceTaskScreen({
 }: NewMaintenanceTaskScreenProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('תיקון');
-  const [priority, setPriority] = useState<MaintenancePriority>('בינוני');
+  const [assignedTo, setAssignedTo] = useState<string>('');
+  const [showAssigneeModal, setShowAssigneeModal] = useState(false);
+  const [media, setMedia] = useState<SelectedMedia | null>(null);
 
-  const categories = ['תיקון', 'מזגן', 'צבע', 'תחזוקה שוטפת', 'אחר'];
-  const priorities: MaintenancePriority[] = ['נמוך', 'בינוני', 'גבוה', 'דחוף'];
+  useEffect(() => {
+    // Default assignee: current user (if we can resolve them from system users list)
+    if (!assignedTo && userName && systemUsers?.length) {
+      const found = systemUsers.find(u => (u.username || '').toString() === userName);
+      if (found?.id) setAssignedTo(found.id.toString());
+    }
+  }, [assignedTo, userName, systemUsers]);
+
+  const handlePickMedia = async () => {
+    try {
+      const result = await launchImageLibrary({
+        mediaType: 'mixed',
+        selectionLimit: 1,
+      });
+      if (result.didCancel) return;
+      const asset = result.assets?.[0];
+      if (!asset?.uri) {
+        Alert.alert('שגיאה', 'לא נבחר קובץ');
+        return;
+      }
+      const mime = asset.type || 'application/octet-stream';
+      const name = asset.fileName || `media-${Date.now()}`;
+      setMedia({ uri: asset.uri, type: mime, name });
+    } catch (err: any) {
+      Alert.alert('שגיאה', err?.message || 'לא ניתן לבחור מדיה');
+    }
+  };
 
   const handleSave = () => {
     if (!title || !description) {
       Alert.alert('שגיאה', 'אנא מלאו את כל השדות הנדרשים');
+      return;
+    }
+    if (!assignedTo) {
+      Alert.alert('שגיאה', 'אנא בחרו עובד לשיוך המשימה');
       return;
     }
 
@@ -5593,10 +5844,9 @@ function NewMaintenanceTaskScreen({
       title,
       description,
       status: 'פתוח',
-      priority,
       createdDate: new Date().toISOString().split('T')[0],
-      category,
-      assignedTo: userName,
+      assignedTo,
+      media,
     };
 
     onSave(newTask);
@@ -5648,33 +5898,44 @@ function NewMaintenanceTaskScreen({
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>קטגוריה</Text>
+            <Text style={styles.label}>שיוך עובד *</Text>
             <Pressable
               onPress={() => {
-                const currentIndex = categories.indexOf(category);
-                const nextIndex = (currentIndex + 1) % categories.length;
-                setCategory(categories[nextIndex]);
+                if (!systemUsers?.length) onRefreshUsers();
+                setShowAssigneeModal(true);
               }}
               style={styles.select}
             >
-              <Text style={styles.selectValue}>{category}</Text>
+              <Text style={styles.selectValue}>
+                {assignedTo
+                  ? (systemUsers.find(u => u.id.toString() === assignedTo)?.username || assignedTo)
+                  : 'בחרו עובד'}
+              </Text>
               <Text style={styles.selectCaret}>▾</Text>
             </Pressable>
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>עדיפות</Text>
-            <Pressable
-              onPress={() => {
-                const currentIndex = priorities.indexOf(priority);
-                const nextIndex = (currentIndex + 1) % priorities.length;
-                setPriority(priorities[nextIndex]);
-              }}
-              style={styles.select}
-            >
-              <Text style={styles.selectValue}>{priority}</Text>
-              <Text style={styles.selectCaret}>▾</Text>
-            </Pressable>
+            <Text style={styles.label}>מדיה (תמונה/וידאו)</Text>
+            {media ? (
+              <View style={styles.closeModalImageContainer}>
+                <View style={styles.taskImagePlaceholder}>
+                  <Text style={styles.taskImagePlaceholderText}>📎 {media.name}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <Pressable onPress={handlePickMedia} style={styles.changeImageButton}>
+                    <Text style={styles.changeImageButtonText}>החלף</Text>
+                  </Pressable>
+                  <Pressable onPress={() => setMedia(null)} style={styles.cancelOrderButton}>
+                    <Text style={styles.cancelOrderButtonText}>הסר</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <Pressable onPress={handlePickMedia} style={styles.uploadImageButton}>
+                <Text style={styles.uploadImageButtonText}>+ העלה תמונה/וידאו</Text>
+              </Pressable>
+            )}
           </View>
 
           <View style={styles.editActions}>
@@ -5687,6 +5948,56 @@ function NewMaintenanceTaskScreen({
           </View>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={showAssigneeModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAssigneeModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { maxHeight: '80%' }]}>
+            <Text style={styles.modalTitle}>בחרו עובד</Text>
+            <Text style={styles.modalSubtitle}>בחרו משתמש מהרשימה כדי לשייך אליו את המשימה</Text>
+
+            <ScrollView style={{ marginTop: 10 }}>
+              {(systemUsers || []).length === 0 ? (
+                <Text style={styles.progressNote}>אין משתמשים (נסו לרענן)</Text>
+              ) : (
+                (systemUsers || []).map(u => (
+                  <Pressable
+                    key={u.id}
+                    onPress={() => {
+                      setAssignedTo(u.id.toString());
+                      setShowAssigneeModal(false);
+                    }}
+                    style={[styles.tableRow, { paddingVertical: 12 }]}
+                  >
+                    <Text style={styles.progressNote}>{u.username}</Text>
+                  </Pressable>
+                ))
+              )}
+            </ScrollView>
+
+            <View style={styles.modalButtons}>
+              <Pressable
+                onPress={() => {
+                  onRefreshUsers();
+                }}
+                style={[styles.modalButton, styles.modalButtonPrimary]}
+              >
+                <Text style={styles.modalButtonText}>רענן רשימה</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setShowAssigneeModal(false)}
+                style={[styles.modalButton, styles.modalButtonGhost]}
+              >
+                <Text style={styles.modalButtonGhostText}>סגור</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -6124,6 +6435,93 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
     textAlign: 'right',
+  },
+  reportUnitKpiGrid: {
+    flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 10,
+  },
+  reportUnitKpiItem: {
+    width: '48%',
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  reportUnitKpiLabel: {
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'right',
+    fontWeight: '700',
+  },
+  reportUnitKpiValue: {
+    marginTop: 4,
+    fontSize: 15,
+    color: '#0f172a',
+    textAlign: 'right',
+    fontWeight: '800',
+  },
+  reportChipRow: {
+    flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  reportChip: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+  },
+  reportChipText: {
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  reportOrderMiniCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    marginTop: 10,
+  },
+  reportOrderMiniHeader: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  reportOrderId: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#0f172a',
+    textAlign: 'right',
+  },
+  reportStatusPill: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+  },
+  reportStatusPillInner: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+  },
+  reportStatusPillText: {
+    fontSize: 12,
+    fontWeight: '900',
+    textAlign: 'right',
+  },
+  reportOrderLine: {
+    fontSize: 12.5,
+    color: '#334155',
+    textAlign: 'right',
+    lineHeight: 18,
+    marginTop: 3,
   },
   quickActions: {
     marginTop: 24,
