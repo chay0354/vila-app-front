@@ -9,6 +9,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import {
   Alert,
   Modal,
+  Image,
   ImageBackground,
   Pressable,
   ScrollView,
@@ -17,8 +18,10 @@ import {
   Text,
   TextInput,
   View,
+  Platform,
 } from 'react-native';
 import { launchImageLibrary } from 'react-native-image-picker';
+import PushNotification from 'react-native-push-notification';
 import {
   SafeAreaProvider,
   SafeAreaView,
@@ -260,6 +263,45 @@ const initialMaintenanceUnits: MaintenanceUnit[] = UNIT_NAMES.map(name => ({
   tasks: [],
 }));
 
+// Initialize push notifications (local notifications only, no Firebase)
+try {
+  PushNotification.configure({
+    onRegister: function (token: any) {
+      console.log('Push notification token:', token);
+    },
+    onNotification: function (notification: any) {
+      console.log('Notification received:', notification);
+    },
+    permissions: {
+      alert: true,
+      badge: true,
+      sound: true,
+    },
+    popInitialNotification: false,
+    requestPermissions: false, // Don't request permissions automatically to avoid Firebase error
+  });
+
+  // Create notification channel for Android (required for Android 8.0+)
+  if (Platform.OS === 'android') {
+    PushNotification.createChannel(
+      {
+        channelId: 'bolavila-notifications',
+        channelName: 'BolaVila Notifications',
+        channelDescription: 'Notifications for chat messages and task assignments',
+        playSound: true,
+        soundName: 'default',
+        importance: 4,
+        vibrate: true,
+      },
+      (created: boolean) => {
+        console.log(`Notification channel ${created ? 'created' : 'already exists'}`);
+      }
+    );
+  }
+} catch (error) {
+  console.error('Failed to configure push notifications:', error);
+}
+
 function App() {
   return (
     <SafeAreaProvider>
@@ -270,6 +312,33 @@ function App() {
 
 function AppContent() {
   const safeAreaInsets = useSafeAreaInsets();
+  
+  // Helper function to send local notification
+  const sendLocalNotification = (title: string, message: string) => {
+    try {
+      const notificationConfig: any = {
+        title: title,
+        message: message,
+        playSound: true,
+        soundName: 'default',
+        vibrate: true,
+        vibration: 300,
+        userInfo: { id: Date.now().toString() },
+      };
+      
+      // Add channelId for Android
+      if (Platform.OS === 'android') {
+        notificationConfig.channelId = 'bolavila-notifications';
+      }
+      
+      // Send notification
+      PushNotification.localNotification(notificationConfig);
+    } catch (error: any) {
+      console.error('Failed to send notification:', error);
+      throw error;
+    }
+  };
+  
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -317,7 +386,7 @@ function AppContent() {
   const loadSystemUsers = async (force = false) => {
     if (systemUsersLoaded && !force) return;
     try {
-      const res = await fetch(`${API_BASE_URL}/users`);
+      const res = await fetch(`${API_BASE_URL}/api/users`);
       if (!res.ok) return;
       const data = await res.json();
       setSystemUsers(Array.isArray(data) ? data : []);
@@ -393,7 +462,7 @@ function AppContent() {
 
   const loadChatMessages = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/chat/messages`);
+      const res = await fetch(`${API_BASE_URL}/api/chat/messages`);
       if (!res.ok) {
         console.warn('Failed to load chat messages', res.status);
         return;
@@ -410,7 +479,7 @@ function AppContent() {
     if (!content.trim() || !userName) return;
     
     try {
-      const url = `${API_BASE_URL}/chat/messages`;
+      const url = `${API_BASE_URL}/api/chat/messages`;
       console.log('Sending chat message:', { url, sender: userName, content: content.trim() });
       
       const res = await fetch(url, {
@@ -442,6 +511,11 @@ function AppContent() {
       
       const responseData = await res.json().catch(() => null);
       console.log('Chat message sent successfully:', responseData);
+      
+      // Send notification to all users (they will receive it when they check messages)
+      // Note: In a real app, you'd send push notifications via backend to specific users
+      // For now, we'll just log it - notifications will be sent when users open the chat
+      
       await loadChatMessages();
     } catch (err: any) {
       console.error('Error sending chat message:', err);
@@ -453,11 +527,32 @@ function AppContent() {
   useEffect(() => {
     if (screen === 'chat') {
       loadChatMessages();
-      // Refresh messages every 5 seconds
-      const interval = setInterval(loadChatMessages, 5000);
+      let previousMessageIds = new Set(chatMessages.map(m => m.id));
+      
+      // Refresh messages every 5 seconds and check for new messages
+      const interval = setInterval(async () => {
+        await loadChatMessages();
+        // Check for new messages after a short delay
+        setTimeout(() => {
+          const currentMessageIds = new Set(chatMessages.map(m => m.id));
+          const newMessages = chatMessages.filter(m => !previousMessageIds.has(m.id));
+          
+          // Send notification for new messages from other users
+          newMessages.forEach(msg => {
+            if (msg.sender !== userName) {
+              sendLocalNotification(
+                `הודעה חדשה מ-${msg.sender}`,
+                msg.content.substring(0, 50) + (msg.content.length > 50 ? '...' : '')
+              );
+            }
+          });
+          
+          previousMessageIds = currentMessageIds;
+        }, 100);
+      }, 5000);
       return () => clearInterval(interval);
     }
-  }, [screen]);
+  }, [screen, userName, chatMessages]);
 
   const loadAttendanceStatus = async () => {
     if (!userName) return;
@@ -535,7 +630,7 @@ function AppContent() {
 
   const loadWarehouses = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/warehouses`);
+      const res = await fetch(`${API_BASE_URL}/api/warehouses`);
       if (res.ok) {
         const data = await res.json();
         setWarehouses(data || []);
@@ -547,7 +642,7 @@ function AppContent() {
 
   const loadWarehouseItems = async (warehouseId: string) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/warehouses/${warehouseId}/items`);
+      const res = await fetch(`${API_BASE_URL}/api/warehouses/${warehouseId}/items`);
       if (res.ok) {
         const data = await res.json();
         setWarehouseItems(data || []);
@@ -567,7 +662,7 @@ function AppContent() {
       const lists = await Promise.all(
         (ws as Array<{ id: string }>).map(async w => {
           try {
-            const itemsRes = await fetch(`${API_BASE_URL}/warehouses/${w.id}/items`);
+            const itemsRes = await fetch(`${API_BASE_URL}/api/warehouses/${w.id}/items`);
             if (!itemsRes.ok) return [];
             return (await itemsRes.json()) || [];
           } catch {
@@ -584,7 +679,7 @@ function AppContent() {
   const loadReportsSummary = async () => {
     try {
       setReportsSummaryError(null);
-      const res = await fetch(`${API_BASE_URL}/reports/summary`);
+      const res = await fetch(`${API_BASE_URL}/api/reports/summary`);
       if (!res.ok) {
         const text = await res.text();
         setReportsSummary(null);
@@ -601,7 +696,7 @@ function AppContent() {
 
   const loadAttendanceLogsReport = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/attendance/logs`);
+      const res = await fetch(`${API_BASE_URL}/api/attendance/logs`);
       if (!res.ok) return;
       const data = await res.json();
       setAttendanceLogsReport(data || []);
@@ -612,7 +707,7 @@ function AppContent() {
 
   const loadMaintenanceTasksReport = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/maintenance/tasks`);
+      const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks`);
       if (!res.ok) return;
       const data = await res.json();
       setMaintenanceTasksReport(data || []);
@@ -623,7 +718,7 @@ function AppContent() {
 
   const loadMaintenanceUnits = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/maintenance/tasks`);
+      const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks`);
       if (!res.ok) return;
       const data = (await res.json()) || [];
 
@@ -672,9 +767,11 @@ function AppContent() {
 
   const loadOrders = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/orders`);
+      const res = await fetch(`${API_BASE_URL}/api/orders`);
       if (!res.ok) return;
-      const data = await res.json();
+      const responseData = await res.json();
+      // Handle both array and {status: 'success', orders: [...]} formats
+      const data = Array.isArray(responseData) ? responseData : (responseData.orders || []);
       const list = (data || []).map((o: any): Order => ({
         id: o.id,
         guestName: o.guest_name ?? o.guestName ?? '',
@@ -695,12 +792,34 @@ function AppContent() {
     }
   };
 
-  const loadInventoryOrders = async () => {
+  const loadInventoryItems = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/inventory/orders`);
+      const res = await fetch(`${API_BASE_URL}/api/inventory/items`);
       if (!res.ok) return;
       const data = await res.json();
-      const list = (data || []).map((o: any): InventoryOrder => {
+      // Handle both array and {status: 'success', items: [...]} formats
+      const items = Array.isArray(data) ? data : (data.items || []);
+      setInventoryItems(items.map((item: any) => ({
+        id: item.id,
+        name: item.name || '',
+        category: item.category || 'אחר',
+        unit: item.unit || '',
+        currentStock: Number(item.currentStock || item.current_stock || 0),
+        minStock: Number(item.minStock || item.min_stock || 0),
+      })));
+    } catch (err) {
+      console.error('Error loading inventory items:', err);
+    }
+  };
+
+  const loadInventoryOrders = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/inventory/orders`);
+      if (!res.ok) return;
+      const data = await res.json();
+      // Handle both array and {status: 'success', orders: [...]} formats
+      const ordersData = Array.isArray(data) ? data : (data.orders || []);
+      const list = (ordersData || []).map((o: any): InventoryOrder => {
         const status = (o.status ?? 'ממתין לאישור') as InventoryOrder['status'];
         const orderType = (o.order_type ?? o.orderType ?? 'הזמנה כללית') as InventoryOrder['orderType'];
         return {
@@ -742,7 +861,8 @@ function AppContent() {
     if (screen === 'exitInspections') {
       loadOrders();
     }
-    if (screen === 'warehouseOrders') {
+    if (screen === 'warehouseOrders' || screen === 'warehouseInventory' || screen === 'newWarehouseItem') {
+      loadInventoryItems();
       loadInventoryOrders();
     }
     if (screen === 'maintenance' || screen === 'maintenanceTasks' || screen === 'maintenanceTaskDetail') {
@@ -752,7 +872,7 @@ function AppContent() {
 
   const createWarehouse = async (name: string, location?: string) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/warehouses`, {
+      const res = await fetch(`${API_BASE_URL}/api/warehouses`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, location }),
@@ -784,7 +904,7 @@ function AppContent() {
       }
       
       console.log('Creating warehouse item:', { warehouseId, payload });
-      const res = await fetch(`${API_BASE_URL}/warehouses/${warehouseId}/items`, {
+      const res = await fetch(`${API_BASE_URL}/api/warehouses/${warehouseId}/items`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -819,7 +939,7 @@ function AppContent() {
 
   const updateWarehouseItem = async (warehouseId: string, itemId: string, quantity: number) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/warehouses/${warehouseId}/items/${itemId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/warehouses/${warehouseId}/items/${itemId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quantity }),
@@ -866,7 +986,7 @@ function AppContent() {
     setError('');
     
     try {
-      const endpoint = mode === 'signup' ? '/auth/signup' : '/auth/signin';
+      const endpoint = mode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
       const url = `${API_BASE_URL}${endpoint}`;
       console.log('Attempting auth:', { mode, url, username: name.trim() });
       
@@ -900,7 +1020,9 @@ function AppContent() {
       }
       
       // Success - set user and navigate to hub
-      setUserName(data.username || name.trim());
+      // Backend returns {status: 'success', user: {id, username}}
+      const user = data.user || data;
+      setUserName(user.username || name.trim());
       setScreen('hub');
       setName('');
       setPassword('');
@@ -927,47 +1049,56 @@ function AppContent() {
       const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
       
       const newOrderData = {
-        guest_name: '',
-        unit_number: '',
-        arrival_date: today,
-        departure_date: nextWeek,
+        guestName: '',
+        unitNumber: '',
+        arrivalDate: today,
+        departureDate: nextWeek,
         status: 'חדש',
-        guests_count: 0,
-        special_requests: '',
-        internal_notes: '',
-        paid_amount: 0,
-        total_amount: 0,
-        payment_method: null,
+        guestsCount: 0,
+        specialRequests: '',
+        internalNotes: '',
+        paidAmount: 0,
+        totalAmount: 0,
+        paymentMethod: 'טרם נקבע',
       };
 
-      const res = await fetch(`${API_BASE_URL}/orders`, {
+      const res = await fetch(`${API_BASE_URL}/api/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newOrderData),
       });
 
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
-        Alert.alert('שגיאה', errorData.detail || 'לא ניתן ליצור הזמנה');
+        const errorText = await res.text().catch(() => 'שגיאה לא ידועה');
+        let errorMessage = 'לא ניתן ליצור הזמנה';
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMessage = errorData.detail || errorData.message || errorMessage;
+        } catch {
+          errorMessage = errorText || errorMessage;
+        }
+        Alert.alert('שגיאה', String(errorMessage));
         return;
       }
 
-      const createdOrder = await res.json();
+      const responseData = await res.json();
+      // Backend returns the order object directly
+      const createdOrder = Array.isArray(responseData) ? responseData[0] : responseData;
       
       // Map backend order to frontend order format
       const mappedOrder: Order = {
-        id: createdOrder.id,
-        guestName: createdOrder.guest_name || '',
-        unitNumber: createdOrder.unit_number || '',
-        arrivalDate: createdOrder.arrival_date || today,
-        departureDate: createdOrder.departure_date || nextWeek,
-        status: createdOrder.status || 'חדש',
-        guestsCount: createdOrder.guests_count || 0,
-        specialRequests: createdOrder.special_requests || '',
-        internalNotes: createdOrder.internal_notes || '',
-        paidAmount: createdOrder.paid_amount || 0,
-        totalAmount: createdOrder.total_amount || 0,
-        paymentMethod: createdOrder.payment_method || undefined,
+        id: createdOrder.id || createdOrder.get?.('id'),
+        guestName: createdOrder.guest_name || createdOrder.guestName || '',
+        unitNumber: normalizeUnitName(createdOrder.unit_number || createdOrder.unitNumber || ''),
+        arrivalDate: createdOrder.arrival_date || createdOrder.arrivalDate || today,
+        departureDate: createdOrder.departure_date || createdOrder.departureDate || nextWeek,
+        status: (createdOrder.status || 'חדש') as OrderStatus,
+        guestsCount: Number(createdOrder.guests_count || createdOrder.guestsCount || 0),
+        specialRequests: createdOrder.special_requests || createdOrder.specialRequests || '',
+        internalNotes: createdOrder.internal_notes || createdOrder.internalNotes || '',
+        paidAmount: Number(createdOrder.paid_amount || createdOrder.paidAmount || 0),
+        totalAmount: Number(createdOrder.total_amount || createdOrder.totalAmount || 0),
+        paymentMethod: createdOrder.payment_method || createdOrder.paymentMethod || 'טרם נקבע',
       };
 
       setOrders(prev => [...prev, mappedOrder]);
@@ -1014,6 +1145,39 @@ function AppContent() {
                 במצב המתחם, תשלומים ועדכוני צוות בזמן אמת.
               </Text>
             </View>
+
+            {/* Test Push Notification Button */}
+            <Pressable
+              onPress={() => {
+                try {
+                  sendLocalNotification(
+                    'בדיקת התראות',
+                    'זוהי התראה לבדיקה - אם אתה רואה את זה, ההתראות עובדות!'
+                  );
+                  Alert.alert('הצלחה', 'התראה נשלחה! בדוק את התראות המכשיר.');
+                } catch (err: any) {
+                  Alert.alert('שגיאה', `לא ניתן לשלוח התראה: ${err?.message || 'שגיאה לא ידועה'}`);
+                }
+              }}
+              style={{
+                backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                borderWidth: 1,
+                borderColor: 'rgba(56, 189, 248, 0.4)',
+                borderRadius: 12,
+                padding: 16,
+                marginHorizontal: 20,
+                marginTop: 20,
+                marginBottom: 10,
+                alignItems: 'center',
+              }}
+            >
+              <Text style={{ color: '#e0f2fe', fontSize: 16, fontWeight: '600' }}>
+                🔔 בדיקת התראות
+              </Text>
+              <Text style={{ color: '#bae6fd', fontSize: 12, marginTop: 4 }}>
+                לחץ לבדיקת התראות
+              </Text>
+            </Pressable>
 
             <View style={styles.glassRow}>
               <View style={styles.glassCard}>
@@ -1326,22 +1490,22 @@ function AppContent() {
         isNewOrder={isNewOrder}
         onSave={async (id, changes) => {
           try {
-            // Map frontend changes to backend format
+            // Map frontend changes to backend format (use camelCase for backend mapping)
             const backendChanges: any = {
               status: changes.status,
-              paid_amount: changes.paidAmount,
-              payment_method: changes.paymentMethod,
-              total_amount: changes.totalAmount,
-              guest_name: changes.guestName,
-              unit_number: changes.unitNumber,
-              arrival_date: changes.arrivalDate,
-              departure_date: changes.departureDate,
-              guests_count: changes.guestsCount,
-              special_requests: changes.specialRequests,
-              internal_notes: changes.internalNotes,
+              paidAmount: changes.paidAmount,
+              paymentMethod: changes.paymentMethod,
+              totalAmount: changes.totalAmount,
+              guestName: changes.guestName,
+              unitNumber: changes.unitNumber,
+              arrivalDate: changes.arrivalDate,
+              departureDate: changes.departureDate,
+              guestsCount: changes.guestsCount,
+              specialRequests: changes.specialRequests,
+              internalNotes: changes.internalNotes,
             };
 
-            const res = await fetch(`${API_BASE_URL}/orders/${id}`, {
+            const res = await fetch(`${API_BASE_URL}/api/orders/${id}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(backendChanges),
@@ -1504,9 +1668,24 @@ function AppContent() {
     return (
       <NewWarehouseOrderScreen
         items={inventoryItems}
-        onSave={(order) => {
-          setInventoryOrders(prev => [...prev, order]);
-          setScreen('warehouseOrders');
+        onSave={async (order) => {
+          try {
+            const res = await fetch(`${API_BASE_URL}/api/inventory/orders`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(order),
+            });
+            if (res.ok) {
+              const data = await res.json();
+              await loadInventoryOrders();
+              setScreen('warehouseOrders');
+            } else {
+              const errorText = await res.text();
+              Alert.alert('שגיאה', `לא ניתן ליצור הזמנה: ${errorText}`);
+            }
+          } catch (err: any) {
+            Alert.alert('שגיאה', err.message || 'אירעה שגיאה ביצירת ההזמנה');
+          }
         }}
         onCancel={() => setScreen('warehouseOrders')}
         safeAreaInsets={safeAreaInsets}
@@ -1638,7 +1817,7 @@ function AppContent() {
             if (updates.title) payload.title = updates.title;
             if (updates.description) payload.description = updates.description;
 
-            const res = await fetch(`${API_BASE_URL}/maintenance/tasks/${encodeURIComponent(taskId)}`, {
+            const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks/${encodeURIComponent(taskId)}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload),
@@ -1672,27 +1851,50 @@ function AppContent() {
         onRefreshUsers={() => loadSystemUsers(true)}
         onSave={async (task) => {
           try {
-            const res = await fetch(`${API_BASE_URL}/maintenance/tasks`, {
+            // Use imageUri from media if available (already in data URI format from image picker)
+            const imageUri = task.imageUri || (task.media?.uri?.startsWith('data:') ? task.media.uri : undefined);
+            
+            const payload: any = {
+              unitId: unit.id,
+              title: task.title,
+              description: task.description,
+              status: task.status,
+              createdDate: task.createdDate,
+            };
+            if (task.assignedTo) {
+              payload.assignedTo = task.assignedTo;
+              
+              // Find assigned user name for notification
+              const assignedUser = systemUsers.find(u => u.id === task.assignedTo);
+              const assignedUserName = assignedUser?.username || 'משתמש';
+              
+              // Find current user ID to compare properly
+              const currentUser = systemUsers.find(u => (u.username || '').toString() === userName);
+              const currentUserId = currentUser?.id?.toString();
+              
+              // Always send notification (user requested notifications even for self-assignment)
+              console.log('Sending task assignment notification:', {
+                taskTitle: task.title,
+                assignedTo: task.assignedTo,
+                currentUserId: currentUserId,
+                userName: userName,
+              });
+              
+              sendLocalNotification(
+                'משימת תחזוקה חדשה',
+                `הוקצתה לך משימה חדשה: ${task.title}`
+              );
+              
+              console.log('Notification sent for task:', task.title);
+            }
+            if (imageUri) {
+              payload.imageUri = imageUri;
+            }
+            
+            const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks`, {
               method: 'POST',
-              body: (() => {
-                const form = new FormData();
-                form.append('id', task.id);
-                form.append('unit_id', unit.id);
-                form.append('title', task.title);
-                form.append('description', task.description);
-                form.append('status', task.status);
-                form.append('created_date', task.createdDate);
-                if (task.assignedTo) form.append('assigned_to', task.assignedTo);
-                if (task.media?.uri) {
-                  form.append('media', {
-                    // @ts-expect-error React Native FormData file
-                    uri: task.media.uri,
-                    type: task.media.type,
-                    name: task.media.name,
-                  });
-                }
-                return form;
-              })(),
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
             });
             if (!res.ok) {
               const errText = await res.text().catch(() => '');
@@ -5587,8 +5789,12 @@ function MaintenanceTasksScreen({
                 </View>
               </View>
               {task.imageUri && (
-                <View style={styles.taskImageIndicator}>
-                  <Text style={styles.taskImageIndicatorText}>📎 מדיה מצורפת</Text>
+                <View style={styles.taskImageContainer}>
+                  <Image
+                    source={{ uri: task.imageUri }}
+                    style={styles.taskImageThumbnail}
+                    resizeMode="cover"
+                  />
                 </View>
               )}
             </Pressable>
@@ -5714,6 +5920,15 @@ function MaintenanceTaskDetailScreen({
           <View style={styles.taskDetailSection}>
             <Text style={styles.taskDetailLabel}>תיאור:</Text>
             <Text style={styles.taskDetailDescription}>{task.description}</Text>
+            {task.imageUri && (
+              <View style={styles.taskImageContainer}>
+                <Image
+                  source={{ uri: task.imageUri }}
+                  style={styles.taskImageFull}
+                  resizeMode="contain"
+                />
+              </View>
+            )}
           </View>
 
           {task.status !== 'סגור' && (
@@ -5811,8 +6026,9 @@ function NewMaintenanceTaskScreen({
   const handlePickMedia = async () => {
     try {
       const result = await launchImageLibrary({
-        mediaType: 'mixed',
+        mediaType: 'photo',
         selectionLimit: 1,
+        includeBase64: true,
       });
       if (result.didCancel) return;
       const asset = result.assets?.[0];
@@ -5820,9 +6036,15 @@ function NewMaintenanceTaskScreen({
         Alert.alert('שגיאה', 'לא נבחר קובץ');
         return;
       }
-      const mime = asset.type || 'application/octet-stream';
+      const mime = asset.type || 'image/jpeg';
       const name = asset.fileName || `media-${Date.now()}`;
-      setMedia({ uri: asset.uri, type: mime, name });
+      // If base64 is available, create data URI
+      if (asset.base64) {
+        const dataUri = `data:${mime};base64,${asset.base64}`;
+        setMedia({ uri: dataUri, type: mime, name });
+      } else {
+        setMedia({ uri: asset.uri, type: mime, name });
+      }
     } catch (err: any) {
       Alert.alert('שגיאה', err?.message || 'לא ניתן לבחור מדיה');
     }
@@ -5919,10 +6141,12 @@ function NewMaintenanceTaskScreen({
             <Text style={styles.label}>מדיה (תמונה/וידאו)</Text>
             {media ? (
               <View style={styles.closeModalImageContainer}>
-                <View style={styles.taskImagePlaceholder}>
-                  <Text style={styles.taskImagePlaceholderText}>📎 {media.name}</Text>
-                </View>
-                <View style={{ flexDirection: 'row', gap: 10 }}>
+                <Image
+                  source={{ uri: media.uri }}
+                  style={styles.taskImageThumbnail}
+                  resizeMode="cover"
+                />
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
                   <Pressable onPress={handlePickMedia} style={styles.changeImageButton}>
                     <Text style={styles.changeImageButtonText}>החלף</Text>
                   </Pressable>
@@ -7919,6 +8143,18 @@ const styles = StyleSheet.create({
   },
   taskImageContainer: {
     marginTop: 8,
+  },
+  taskImageThumbnail: {
+    width: '100%',
+    height: 150,
+    borderRadius: 12,
+    backgroundColor: '#f1f5f9',
+  },
+  taskImageFull: {
+    width: '100%',
+    height: 300,
+    borderRadius: 12,
+    backgroundColor: '#f1f5f9',
   },
   taskImagePlaceholder: {
     backgroundColor: '#f8fafc',
