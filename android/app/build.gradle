@@ -123,7 +123,11 @@ dependencies {
         implementation jscFlavor
     }
     
+<<<<<<< HEAD
     // Exclude old Android Support Library to avoid duplicate class errors
+=======
+    // Exclude old Android Support Library from react-native-push-notification to avoid duplicate class errors
+>>>>>>> 9290cd4ad2b493b0194e99dc8b17e2b2c1c030cd
     configurations.all {
         exclude group: 'com.android.support', module: 'support-v4'
     }
