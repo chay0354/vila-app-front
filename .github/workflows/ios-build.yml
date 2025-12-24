@@ -86,18 +86,27 @@ jobs:
           </plist>
           EOF
       
-      - name: Export IPA (Attempt)
+      - name: Create IPA manually from archive
         run: |
-          cd ios
-          xcodebuild -exportArchive \
-            -archivePath ./build/FrontNative.xcarchive \
-            -exportPath ./build/export \
-            -exportOptionsPlist ./ExportOptions.plist \
-            -allowProvisioningUpdates \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO || echo "⚠️ IPA export failed (signing required), but archive is available"
-          cd ..
+          cd ios/build
+          # Extract app from archive
+          APP_PATH=$(find FrontNative.xcarchive/Products/Applications -name "*.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ App not found in archive"
+            exit 1
+          fi
+          
+          # Create IPA structure
+          mkdir -p export/Payload
+          cp -R "$APP_PATH" export/Payload/
+          
+          # Create IPA file
+          cd export
+          zip -r FrontNative.ipa Payload/
+          
+          echo "✅ IPA created: export/FrontNative.ipa"
+          ls -lh FrontNative.ipa
+          cd ../..
         continue-on-error: true
       
       - name: Upload IPA artifact (if created)
@@ -106,6 +115,15 @@ jobs:
         with:
           name: ios-ipa
           path: ios/build/export/*.ipa
+          retention-days: 30
+        continue-on-error: true
+      
+      - name: Upload IPA artifact (manual creation)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-ipa-manual
+          path: ios/build/export/FrontNative.ipa
           retention-days: 30
         continue-on-error: true
       
@@ -119,7 +137,11 @@ jobs:
       
       - name: Build status
         run: |
-          if [ -f ios/build/export/*.ipa ]; then
+          if [ -f ios/build/export/FrontNative.ipa ]; then
+            echo "✅ IPA file created successfully!"
+            echo "📦 IPA is available in the 'ios-ipa-manual' artifact"
+            echo "⚠️ Note: This IPA is unsigned and may not install on real devices without proper signing"
+          elif [ -f ios/build/export/*.ipa ]; then
             echo "✅ IPA file created successfully!"
             echo "📦 IPA is available in the 'ios-ipa' artifact"
           elif [ -d ios/build/FrontNative.xcarchive ]; then
