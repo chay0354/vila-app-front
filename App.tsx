@@ -603,32 +603,52 @@ function AppContent() {
         
         if (loadedMissions.length > 0) {
           hasLoadedFromBackend.current = true;
-          setInspectionMissions(loadedMissions);
-          // Only derive missing missions for orders that don't have inspections yet
-          // Don't overwrite loaded missions - they have the correct completion status
+          // Group by departure date - one mission per departure date
+          const missionsByDate = new Map<string, InspectionMission>();
+          loadedMissions.forEach(m => {
+            const date = m.departureDate;
+            const existing = missionsByDate.get(date);
+            if (!existing || (existing.tasks.filter(t => t.completed).length < m.tasks.filter(t => t.completed).length)) {
+              // Use the mission with more completed tasks, or the new one if none exists
+              missionsByDate.set(date, m);
+            }
+          });
+          setInspectionMissions(Array.from(missionsByDate.values()));
+          
+          // Only derive missing missions for departure dates that don't have inspections yet
           if (orders.length > 0) {
             setInspectionMissions(prev => {
-              const prevByOrderId = new Map<string, InspectionMission>();
-              prev.forEach(m => prevByOrderId.set(m.orderId, m));
+              const prevByDate = new Map<string, InspectionMission>();
+              prev.forEach(m => prevByDate.set(m.departureDate, m));
               
               const next = [...prev];
+              const ordersByDate = new Map<string, Order[]>();
               (orders || [])
                 .filter(o => o.status !== 'בוטל')
                 .forEach(o => {
-                  // Only add if this order doesn't have an inspection yet
-                  if (!prevByOrderId.has(o.id)) {
-                    const tasks = defaultInspectionTasks.map(t => ({ ...t }));
-                    next.push({
-                      id: `INSP-${o.id}`,
-                      orderId: o.id,
-                      unitNumber: o.unitNumber,
-                      guestName: o.guestName,
-                      departureDate: o.departureDate,
-                      tasks,
-                      status: computeInspectionStatus({ departureDate: o.departureDate, tasks }),
-                    });
+                  const date = o.departureDate;
+                  if (!ordersByDate.has(date)) {
+                    ordersByDate.set(date, []);
                   }
+                  ordersByDate.get(date)!.push(o);
                 });
+              
+              ordersByDate.forEach((ordersForDate, date) => {
+                // Only add if this departure date doesn't have an inspection yet
+                if (!prevByDate.has(date)) {
+                  const firstOrder = ordersForDate[0];
+                  const tasks = defaultInspectionTasks.map(t => ({ ...t }));
+                  next.push({
+                    id: `INSP-${date}`,
+                    orderId: firstOrder.id, // Keep first order ID for reference
+                    unitNumber: firstOrder.unitNumber,
+                    guestName: ordersForDate.map(o => o.guestName).join(', '), // Combine guest names
+                    departureDate: date,
+                    tasks,
+                    status: computeInspectionStatus({ departureDate: date, tasks }),
+                  });
+                }
+              });
               return next;
             });
           }
@@ -646,54 +666,74 @@ function AppContent() {
   };
 
   // Reconcile missions from orders (fallback if backend has no data)
+  // Group by departure date - one mission per departure date
   const deriveMissionsFromOrders = async () => {
     setInspectionMissions(prev => {
-      const prevByOrderId = new Map<string, InspectionMission>();
-      (prev || []).forEach(m => prevByOrderId.set(m.orderId, m));
+      const prevByDate = new Map<string, InspectionMission>();
+      (prev || []).forEach(m => {
+        const date = m.departureDate;
+        const existing = prevByDate.get(date);
+        if (!existing || (existing.tasks.filter(t => t.completed).length < m.tasks.filter(t => t.completed).length)) {
+          // Use the mission with more completed tasks, or the new one if none exists
+          prevByDate.set(date, m);
+        }
+      });
 
       const next: InspectionMission[] = [];
       const newMissions: InspectionMission[] = [];
+      const ordersByDate = new Map<string, Order[]>();
       
+      // Group orders by departure date
       (orders || [])
         .filter(o => o.status !== 'בוטל')
         .forEach(o => {
-          const existing = prevByOrderId.get(o.id);
-          const isNew = !existing;
-          
-          // Ensure tasks are always populated with all default tasks
-          let tasks: InspectionTask[] = [];
-          if (existing?.tasks?.length) {
-            // Merge existing tasks with default tasks to ensure all are present
-            const tasksMap = new Map(existing.tasks.map(t => [t.id, t]));
-            tasks = defaultInspectionTasks.map(defaultTask => {
-              const existingTask = tasksMap.get(defaultTask.id);
-              if (existingTask) {
-                // Use existing task (preserves completion status)
-                return { ...existingTask };
-              } else {
-                // Default task not in existing, add it as incomplete
-                return { ...defaultTask };
-              }
-            });
-          } else {
-            // No existing tasks, use all default tasks
-            tasks = defaultInspectionTasks.map(t => ({ ...t }));
+          const date = o.departureDate;
+          if (!ordersByDate.has(date)) {
+            ordersByDate.set(date, []);
           }
-          
-          const mission: InspectionMission = {
-            id: existing?.id || `INSP-${o.id}`,
-            orderId: o.id,
-            unitNumber: o.unitNumber,
-            guestName: o.guestName,
-            departureDate: o.departureDate,
-            tasks,
-            status: computeInspectionStatus({ departureDate: o.departureDate, tasks }),
-          };
-          next.push(mission);
-          if (isNew) {
-            newMissions.push(mission);
-          }
+          ordersByDate.get(date)!.push(o);
         });
+      
+      // Create one mission per departure date
+      ordersByDate.forEach((ordersForDate, date) => {
+        const existing = prevByDate.get(date);
+        const isNew = !existing;
+        const firstOrder = ordersForDate[0];
+        
+        // Ensure tasks are always populated with all default tasks
+        let tasks: InspectionTask[] = [];
+        if (existing?.tasks?.length) {
+          // Merge existing tasks with default tasks to ensure all are present
+          const tasksMap = new Map(existing.tasks.map(t => [t.id, t]));
+          tasks = defaultInspectionTasks.map(defaultTask => {
+            const existingTask = tasksMap.get(defaultTask.id);
+            if (existingTask) {
+              // Use existing task (preserves completion status)
+              return { ...existingTask };
+            } else {
+              // Default task not in existing, add it as incomplete
+              return { ...defaultTask };
+            }
+          });
+        } else {
+          // No existing tasks, use all default tasks
+          tasks = defaultInspectionTasks.map(t => ({ ...t }));
+        }
+        
+        const mission: InspectionMission = {
+          id: existing?.id || `INSP-${date}`,
+          orderId: firstOrder.id, // Keep first order ID for reference
+          unitNumber: firstOrder.unitNumber,
+          guestName: ordersForDate.map(o => o.guestName).join(', '), // Combine guest names
+          departureDate: date,
+          tasks,
+          status: computeInspectionStatus({ departureDate: date, tasks }),
+        };
+        next.push(mission);
+        if (isNew) {
+          newMissions.push(mission);
+        }
+      });
 
       // Save new missions to backend
       if (newMissions.length > 0) {
@@ -729,37 +769,53 @@ function AppContent() {
   // Use a ref to track if we've loaded from backend to prevent overwriting
   const hasLoadedFromBackend = React.useRef(false);
   
-  // Always sync missions from orders to ensure every order has an inspection
-  // This ensures that when new orders are created, inspections are automatically created
+  // Always sync missions from orders to ensure every departure date has an inspection
+  // Group by departure date - one mission per departure date
   // BUT: Don't overwrite missions that were loaded from backend - they have saved completion status
   useEffect(() => {
     if (orders.length > 0 && !hasLoadedFromBackend.current) {
       // Only derive if we haven't loaded from backend yet (initial load)
       deriveMissionsFromOrders();
     } else if (orders.length > 0 && inspectionMissions.length > 0) {
-      // After backend load, only add missing missions, don't overwrite existing ones
+      // After backend load, only add missing missions for departure dates, don't overwrite existing ones
       setInspectionMissions(prev => {
-        const prevByOrderId = new Map<string, InspectionMission>();
-        (prev || []).forEach(m => prevByOrderId.set(m.orderId, m));
+        const prevByDate = new Map<string, InspectionMission>();
+        (prev || []).forEach(m => {
+          const date = m.departureDate;
+          const existing = prevByDate.get(date);
+          if (!existing || (existing.tasks.filter(t => t.completed).length < m.tasks.filter(t => t.completed).length)) {
+            prevByDate.set(date, m);
+          }
+        });
         
         const next = [...(prev || [])];
+        const ordersByDate = new Map<string, Order[]>();
         (orders || [])
           .filter(o => o.status !== 'בוטל')
           .forEach(o => {
-            // Only add if this order doesn't have an inspection yet
-            if (!prevByOrderId.has(o.id)) {
-              const tasks = defaultInspectionTasks.map(t => ({ ...t }));
-              next.push({
-                id: `INSP-${o.id}`,
-                orderId: o.id,
-                unitNumber: o.unitNumber,
-                guestName: o.guestName,
-                departureDate: o.departureDate,
-                tasks,
-                status: computeInspectionStatus({ departureDate: o.departureDate, tasks }),
-              });
+            const date = o.departureDate;
+            if (!ordersByDate.has(date)) {
+              ordersByDate.set(date, []);
             }
+            ordersByDate.get(date)!.push(o);
           });
+        
+        ordersByDate.forEach((ordersForDate, date) => {
+          // Only add if this departure date doesn't have an inspection yet
+          if (!prevByDate.has(date)) {
+            const firstOrder = ordersForDate[0];
+            const tasks = defaultInspectionTasks.map(t => ({ ...t }));
+            next.push({
+              id: `INSP-${date}`,
+              orderId: firstOrder.id, // Keep first order ID for reference
+              unitNumber: firstOrder.unitNumber,
+              guestName: ordersForDate.map(o => o.guestName).join(', '), // Combine guest names
+              departureDate: date,
+              tasks,
+              status: computeInspectionStatus({ departureDate: date, tasks }),
+            });
+          }
+        });
         return next;
       });
     }
@@ -1906,6 +1962,7 @@ function AppContent() {
       <ExitInspectionsScreen
         missions={missionsAll}
         defaultInspectionTasks={defaultInspectionTasks}
+        loadInspections={loadInspections}
         onUpdateMission={async (id, updates) => {
           const mission = inspectionMissions.find(m => m.id === id);
           if (!mission) return;
@@ -3140,6 +3197,7 @@ type ExitInspectionsProps = {
   onBack: () => void;
   safeAreaInsets: { top: number };
   statusBar: React.ReactElement;
+  loadInspections: () => Promise<void>;
 };
 
 function ExitInspectionsScreen({
@@ -3149,6 +3207,7 @@ function ExitInspectionsScreen({
   onBack,
   safeAreaInsets,
   statusBar,
+  loadInspections,
 }: ExitInspectionsProps) {
 
   const toggleTask = async (missionId: string, taskId: string) => {
@@ -6673,8 +6732,9 @@ function MaintenanceTaskDetailScreen({
 
   const handleCloseModalImageSelect = async () => {
     try {
-      const result = await launchCamera({
+      const result = await launchImageLibrary({
         mediaType: 'mixed', // Allow both photos and videos
+        selectionLimit: 1,
         includeBase64: true,
       });
       if (result.didCancel) return;
@@ -6698,8 +6758,9 @@ function MaintenanceTaskDetailScreen({
 
   const handleEditMediaSelect = async () => {
     try {
-      const result = await launchCamera({
+      const result = await launchImageLibrary({
         mediaType: 'mixed', // Allow both photos and videos
+        selectionLimit: 1,
         includeBase64: true,
       });
       if (result.didCancel) return;
@@ -7095,8 +7156,9 @@ function NewMaintenanceTaskScreen({
 
   const handlePickMedia = async () => {
     try {
-      const result = await launchCamera({
+      const result = await launchImageLibrary({
         mediaType: 'mixed', // Allow both photos and videos
+        selectionLimit: 1,
         includeBase64: true,
       });
       if (result.didCancel) return;
