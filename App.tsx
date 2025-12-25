@@ -21,7 +21,7 @@ import {
   Platform,
   PermissionsAndroid,
 } from 'react-native';
-import { launchImageLibrary } from 'react-native-image-picker';
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import Video from 'react-native-video';
 import {
   SafeAreaProvider,
@@ -168,41 +168,98 @@ const paymentOptions = [
   'אחר',
 ];
 
-// Single source of truth for vacation units in the system (10 units only)
-const UNIT_NAMES = Array.from({ length: 10 }, (_, i) => `יחידה ${i + 1}`);
+// Single source of truth for vacation units in the system
+type UnitCategory = {
+  name: string;
+  units: string[];
+};
+
+const UNIT_CATEGORIES: UnitCategory[] = [
+  {
+    name: 'מתחמים מושב כלנית',
+    units: [
+      'צימרים כלנית ריזורט',
+      'וילה ויקטוריה',
+      'וילה כלנית',
+      'וילה ממלכת אהרון',
+      'וילה בוטיק אהרון',
+      'וילה אירופה',
+    ],
+  },
+  {
+    name: 'מושב מגדל',
+    units: [
+      'וילאה 1',
+      'וילאה 2',
+      'לה כינרה',
+    ],
+  },
+  {
+    name: 'גבעת יואב',
+    units: [
+      'הודולה 1',
+      'הודולה 2',
+      'הודולה 3',
+      'הודולה 4',
+      'הודולה 5',
+    ],
+  },
+  {
+    name: 'צפת',
+    units: [
+      'בית קונפיטה',
+    ],
+  },
+];
+
+// Flatten all unit names for validation and easy access
+const UNIT_NAMES = UNIT_CATEGORIES.flatMap(category => category.units);
 
 function normalizeUnitName(raw?: string | null): string {
   const s = (raw ?? '').toString().trim();
   if (!s) return '';
   if (UNIT_NAMES.includes(s)) return s;
-  const m = s.match(/(\d+)/);
-  if (m) {
-    const n = Number(m[1]);
-    if (Number.isFinite(n) && n >= 1 && n <= 10) return `יחידה ${n}`;
-  }
-  return '';
+  // Try to find a match by partial name
+  const normalized = UNIT_NAMES.find(name => 
+    name.toLowerCase().includes(s.toLowerCase()) || 
+    s.toLowerCase().includes(name.toLowerCase())
+  );
+  return normalized || s;
 }
 
 function unitIdFromName(name: string): string {
-  const m = name.match(/(\d+)/);
-  const n = m ? Number(m[1]) : NaN;
-  if (Number.isFinite(n) && n >= 1 && n <= 10) return `unit-${n}`;
-  return 'unit-1';
+  // Generate a stable ID from the unit name
+  // Replace spaces and special chars with hyphens, convert to lowercase
+  const id = name
+    .replace(/\s+/g, '-')
+    .replace(/[^\u0590-\u05FF\w-]/g, '')
+    .toLowerCase();
+  return `unit-${id}`;
 }
 
 function normalizeMaintenanceUnitId(raw?: string | null): string {
   const s = (raw ?? '').toString().trim();
-  if (!s) return 'unit-1';
-  if (/^unit-\d+$/.test(s)) {
-    const n = Number(s.split('-')[1]);
-    if (Number.isFinite(n) && n >= 1 && n <= 10) return `unit-${n}`;
+  if (!s) {
+    // Default to first unit if empty
+    return UNIT_NAMES.length > 0 ? unitIdFromName(UNIT_NAMES[0]) : 'unit-default';
   }
-  const m = s.match(/(\d+)/);
-  if (m) {
-    const n = Number(m[1]);
-    if (Number.isFinite(n) && n >= 1 && n <= 10) return `unit-${n}`;
+  // If it's already a unit-* format, check if it matches a known unit
+  if (/^unit-/.test(s)) {
+    // Try to find matching unit name
+    const unitName = UNIT_NAMES.find(name => unitIdFromName(name) === s);
+    if (unitName) return s;
   }
-  return 'unit-1';
+  // Try to find by name match
+  const matchingUnit = UNIT_NAMES.find(name => 
+    name.toLowerCase() === s.toLowerCase() ||
+    name.includes(s) ||
+    s.includes(name)
+  );
+  if (matchingUnit) {
+    return unitIdFromName(matchingUnit);
+  }
+  // If no match, generate ID from the string itself
+  return unitIdFromName(s);
 }
 
 function normalizeISODate(raw?: string | null): string {
@@ -280,7 +337,7 @@ const initialInventoryOrders: InventoryOrder[] = [
     status: 'ממתין לאישור',
     orderType: 'הזמנת עובד',
     orderedBy: 'שירה לוי',
-    unitNumber: 'יחידה 1',
+    unitNumber: UNIT_NAMES[0] || '',
   },
 ];
 
@@ -446,35 +503,184 @@ function AppContent() {
   }, [orders]);
 
   const defaultInspectionTasks: InspectionTask[] = useMemo(() => [
-    { id: '1', name: 'ניקיון חדרים', completed: false },
-    { id: '2', name: 'ניקיון מטבח', completed: false },
-    { id: '3', name: 'ניקיון שירותים', completed: false },
-    { id: '4', name: 'בדיקת מכשירים', completed: false },
-    { id: '5', name: 'בדיקת מצב ריהוט', completed: false },
-    { id: '6', name: 'החלפת מצעים', completed: false },
-    { id: '7', name: 'החלפת מגבות', completed: false },
-    { id: '8', name: 'בדיקת מלאי', completed: false },
+    // טיפול ברכיה
+    { id: '1', name: 'לשים כלור בבריכה', completed: false },
+    { id: '2', name: 'להוסיף מים בבריכה', completed: false },
+    { id: '3', name: 'לנקות רובוט ולהפעיל', completed: false },
+    { id: '4', name: 'לנקות רשת פנים המנוע', completed: false },
+    { id: '5', name: 'לעשות בקווש שטיפה לפילטר', completed: false },
+    { id: '6', name: 'לטאטא הבק מהמדרגות ומשטחי רביצה', completed: false },
+    // טיפול גקוזי
+    { id: '7', name: 'לשים כלור בגקוזי', completed: false },
+    { id: '8', name: 'להוסיף מים בגקוזי', completed: false },
+    { id: '9', name: 'לנקות רובוט גקוזי ולהפעיל', completed: false },
+    { id: '10', name: 'לנקות רשת פנים המנוע גקוזי', completed: false },
+    { id: '11', name: 'לעשות בקווש שטיפה לפילטר גקוזי', completed: false },
+    { id: '12', name: 'לטאטא הבק מהמדרגות ומשטחי רביצה גקוזי', completed: false },
+    // ניקיון
+    { id: '13', name: 'ניקיון חדרים', completed: false },
+    { id: '14', name: 'ניקיון מטבח', completed: false },
+    { id: '15', name: 'ניקיון שירותים', completed: false },
+    { id: '16', name: 'פינוי זבל לפח אשפה פנים וחוץ הוילה', completed: false },
+    // בדיקות
+    { id: '17', name: 'בדיקת מכשירים', completed: false },
+    { id: '18', name: 'בדיקת מצב ריהוט', completed: false },
+    { id: '19', name: 'החלפת מצעים', completed: false },
+    { id: '20', name: 'החלפת מגבות', completed: false },
+    { id: '21', name: 'בדיקת מלאי', completed: false },
+    { id: '22', name: 'לבדוק תקינות חדרים', completed: false },
+    // כיבוי ונעילה
+    { id: '23', name: 'כיבוי אורות פנים וחוץ הוילה', completed: false },
+    { id: '24', name: 'לנעול דלת ראשית', completed: false },
   ], []);
 
-  useEffect(() => {
-    // Reconcile missions from orders:
-    // - exactly 1 mission per (non-cancelled) order
-    // - preserve task completion from previous state
-    // - drop missions that don't match any current order (removes fake/mocked ones)
+  // Load inspections from backend
+  const loadInspections = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/inspections`);
+      if (res.ok) {
+        const data = await res.json();
+        const loadedMissions: InspectionMission[] = (data || []).map((insp: any) => {
+          const backendTasks = (insp.tasks || []).map((t: any) => ({
+            id: String(t.id), // Ensure ID is a string
+            name: String(t.name || ''),
+            completed: Boolean(t.completed), // Ensure it's a boolean, not string
+          }));
+          
+          console.log('Loaded inspection:', insp.id, 'with', backendTasks.length, 'tasks from backend');
+          console.log('Backend tasks:', backendTasks.map(t => ({ id: t.id, name: t.name, completed: t.completed })));
+          
+          // If no tasks from backend, use default tasks
+          // Otherwise, merge backend tasks with default tasks to ensure all tasks are present
+          let tasks: InspectionTask[] = [];
+          if (backendTasks.length === 0) {
+            // No tasks in backend, use all default tasks
+            tasks = defaultInspectionTasks.map(t => ({ ...t }));
+          } else {
+            // Merge: use backend tasks for completion status, but ensure all default tasks are present
+            // Match by ID first, then by name as fallback (in case IDs don't match)
+            const tasksMapById = new Map(backendTasks.map(t => [String(t.id), t]));
+            const tasksMapByName = new Map(backendTasks.map(t => [String(t.name).trim().toLowerCase(), t]));
+            
+            tasks = defaultInspectionTasks.map(defaultTask => {
+              // Try to find by ID first
+              let backendTask = tasksMapById.get(String(defaultTask.id));
+              
+              // If not found by ID, try to find by name (case-insensitive, trimmed)
+              if (!backendTask) {
+                const defaultTaskName = String(defaultTask.name).trim().toLowerCase();
+                backendTask = tasksMapByName.get(defaultTaskName);
+              }
+              
+              if (backendTask) {
+                // Use backend task (preserves completion status)
+                const completed = Boolean(backendTask.completed);
+                console.log(`Task ${defaultTask.id} (${defaultTask.name}): completed=${completed} from backend (matched by ${tasksMapById.has(String(defaultTask.id)) ? 'ID' : 'name'})`);
+                return { 
+                  id: String(defaultTask.id), // Always use default task ID to ensure consistency
+                  name: String(backendTask.name || defaultTask.name),
+                  completed: completed // Ensure it's a boolean
+                };
+              } else {
+                // Default task not in backend, add it as incomplete
+                console.log(`Task ${defaultTask.id} (${defaultTask.name}): not in backend, using default (incomplete)`);
+                return { ...defaultTask };
+              }
+            });
+            console.log('Final merged tasks:', tasks.map(t => ({ id: t.id, name: t.name, completed: t.completed })));
+          }
+          
+          return {
+            id: insp.id,
+            orderId: insp.order_id || insp.orderId || '',
+            unitNumber: insp.unit_number || insp.unitNumber || '',
+            guestName: insp.guest_name || insp.guestName || '',
+            departureDate: insp.departure_date || insp.departureDate || '',
+            status: (insp.status || 'זמן הביקורות טרם הגיע') as InspectionStatus,
+            tasks,
+          };
+        });
+        
+        if (loadedMissions.length > 0) {
+          hasLoadedFromBackend.current = true;
+          setInspectionMissions(loadedMissions);
+          // Only derive missing missions for orders that don't have inspections yet
+          // Don't overwrite loaded missions - they have the correct completion status
+          if (orders.length > 0) {
+            setInspectionMissions(prev => {
+              const prevByOrderId = new Map<string, InspectionMission>();
+              prev.forEach(m => prevByOrderId.set(m.orderId, m));
+              
+              const next = [...prev];
+              (orders || [])
+                .filter(o => o.status !== 'בוטל')
+                .forEach(o => {
+                  // Only add if this order doesn't have an inspection yet
+                  if (!prevByOrderId.has(o.id)) {
+                    const tasks = defaultInspectionTasks.map(t => ({ ...t }));
+                    next.push({
+                      id: `INSP-${o.id}`,
+                      orderId: o.id,
+                      unitNumber: o.unitNumber,
+                      guestName: o.guestName,
+                      departureDate: o.departureDate,
+                      tasks,
+                      status: computeInspectionStatus({ departureDate: o.departureDate, tasks }),
+                    });
+                  }
+                });
+              return next;
+            });
+          }
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Error loading inspections from backend:', err);
+    }
+    
+    // Fallback: derive from orders if backend has no data
+    if (orders.length > 0) {
+      deriveMissionsFromOrders();
+    }
+  };
+
+  // Reconcile missions from orders (fallback if backend has no data)
+  const deriveMissionsFromOrders = async () => {
     setInspectionMissions(prev => {
       const prevByOrderId = new Map<string, InspectionMission>();
       (prev || []).forEach(m => prevByOrderId.set(m.orderId, m));
 
       const next: InspectionMission[] = [];
+      const newMissions: InspectionMission[] = [];
+      
       (orders || [])
         .filter(o => o.status !== 'בוטל')
         .forEach(o => {
           const existing = prevByOrderId.get(o.id);
-          const tasks =
-            existing?.tasks?.length
-              ? existing.tasks
-              : defaultInspectionTasks.map(t => ({ ...t }));
-          next.push({
+          const isNew = !existing;
+          
+          // Ensure tasks are always populated with all default tasks
+          let tasks: InspectionTask[] = [];
+          if (existing?.tasks?.length) {
+            // Merge existing tasks with default tasks to ensure all are present
+            const tasksMap = new Map(existing.tasks.map(t => [t.id, t]));
+            tasks = defaultInspectionTasks.map(defaultTask => {
+              const existingTask = tasksMap.get(defaultTask.id);
+              if (existingTask) {
+                // Use existing task (preserves completion status)
+                return { ...existingTask };
+              } else {
+                // Default task not in existing, add it as incomplete
+                return { ...defaultTask };
+              }
+            });
+          } else {
+            // No existing tasks, use all default tasks
+            tasks = defaultInspectionTasks.map(t => ({ ...t }));
+          }
+          
+          const mission: InspectionMission = {
             id: existing?.id || `INSP-${o.id}`,
             orderId: o.id,
             unitNumber: o.unitNumber,
@@ -482,12 +688,82 @@ function AppContent() {
             departureDate: o.departureDate,
             tasks,
             status: computeInspectionStatus({ departureDate: o.departureDate, tasks }),
-          });
+          };
+          next.push(mission);
+          if (isNew) {
+            newMissions.push(mission);
+          }
         });
+
+      // Save new missions to backend
+      if (newMissions.length > 0) {
+        newMissions.forEach(async (mission) => {
+          try {
+            await fetch(`${API_BASE_URL}/api/inspections`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: mission.id,
+                orderId: mission.orderId,
+                unitNumber: mission.unitNumber,
+                guestName: mission.guestName,
+                departureDate: mission.departureDate,
+                status: mission.status,
+                tasks: mission.tasks,
+              }),
+            });
+          } catch (err) {
+            console.error('Error saving new inspection to backend:', err);
+          }
+        });
+      }
 
       return next;
     });
-  }, [orders, defaultInspectionTasks]);
+  };
+
+  useEffect(() => {
+    loadInspections();
+  }, []);
+
+  // Use a ref to track if we've loaded from backend to prevent overwriting
+  const hasLoadedFromBackend = React.useRef(false);
+  
+  // Always sync missions from orders to ensure every order has an inspection
+  // This ensures that when new orders are created, inspections are automatically created
+  // BUT: Don't overwrite missions that were loaded from backend - they have saved completion status
+  useEffect(() => {
+    if (orders.length > 0 && !hasLoadedFromBackend.current) {
+      // Only derive if we haven't loaded from backend yet (initial load)
+      deriveMissionsFromOrders();
+    } else if (orders.length > 0 && inspectionMissions.length > 0) {
+      // After backend load, only add missing missions, don't overwrite existing ones
+      setInspectionMissions(prev => {
+        const prevByOrderId = new Map<string, InspectionMission>();
+        (prev || []).forEach(m => prevByOrderId.set(m.orderId, m));
+        
+        const next = [...(prev || [])];
+        (orders || [])
+          .filter(o => o.status !== 'בוטל')
+          .forEach(o => {
+            // Only add if this order doesn't have an inspection yet
+            if (!prevByOrderId.has(o.id)) {
+              const tasks = defaultInspectionTasks.map(t => ({ ...t }));
+              next.push({
+                id: `INSP-${o.id}`,
+                orderId: o.id,
+                unitNumber: o.unitNumber,
+                guestName: o.guestName,
+                departureDate: o.departureDate,
+                tasks,
+                status: computeInspectionStatus({ departureDate: o.departureDate, tasks }),
+              });
+            }
+          });
+        return next;
+      });
+    }
+  }, [orders, defaultInspectionTasks, inspectionMissions.length]);
 
   const loadChatMessages = async () => {
     try {
@@ -1666,10 +1942,35 @@ function AppContent() {
     return (
       <ExitInspectionsScreen
         missions={missionsAll}
-        onUpdateMission={(id, updates) => {
+        defaultInspectionTasks={defaultInspectionTasks}
+        onUpdateMission={async (id, updates) => {
+          const mission = inspectionMissions.find(m => m.id === id);
+          if (!mission) return;
+
+          // Update local state immediately for responsive UI
           setInspectionMissions(prev =>
             prev.map(m => (m.id === id ? { ...m, ...updates } : m)),
           );
+
+          // Save to backend
+          try {
+            const updatedMission = { ...mission, ...updates };
+            await fetch(`${API_BASE_URL}/api/inspections`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: updatedMission.id,
+                orderId: updatedMission.orderId,
+                unitNumber: updatedMission.unitNumber,
+                guestName: updatedMission.guestName,
+                departureDate: updatedMission.departureDate,
+                status: updatedMission.status,
+                tasks: updatedMission.tasks,
+              }),
+            });
+          } catch (err) {
+            console.error('Error saving inspection to backend:', err);
+          }
         }}
         onBack={() => setScreen('hub')}
         safeAreaInsets={safeAreaInsets}
@@ -2173,40 +2474,17 @@ function OrderCard({ order, onEdit }: OrderCardProps) {
       : 0,
   );
 
-  const getStatusColor = (status: OrderStatus) => {
-    switch (status) {
-      case 'חדש':
-        return { bg: '#fef3c7', border: '#fbbf24', text: '#92400e' };
-      case 'באישור':
-        return { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af' };
-      case 'שולם חלקית':
-        return { bg: '#fce7f3', border: '#ec4899', text: '#9f1239' };
-      case 'שולם':
-        return { bg: '#d1fae5', border: '#10b981', text: '#065f46' };
-      case 'בוטל':
-        return { bg: '#fee2e2', border: '#ef4444', text: '#991b1b' };
-      default:
-        return { bg: '#f3f4f6', border: '#9ca3af', text: '#374151' };
-    }
-  };
-
-  const statusColors = getStatusColor(order.status);
   const remainingAmount = order.totalAmount - order.paidAmount;
 
   return (
     <View style={[styles.card, styles.orderCardEnhanced]}>
-      {/* Header with Unit and Status */}
+      {/* Header with Unit */}
       <View style={styles.orderCardHeaderEnhanced}>
         <View style={styles.orderCardHeaderLeft}>
           <View style={styles.orderCardTitleContainer}>
             <Text style={styles.orderCardUnitTitle}>{order.unitNumber}</Text>
             <Text style={styles.orderCardId}>#{order.id}</Text>
           </View>
-        </View>
-        <View style={[styles.statusBadgeEnhanced, { backgroundColor: statusColors.bg, borderColor: statusColors.border }]}>
-          <Text style={[styles.statusBadgeTextEnhanced, { color: statusColors.text }]}>
-            {order.status}
-          </Text>
         </View>
       </View>
 
@@ -2423,7 +2701,7 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel }: OrderE
       return;
     }
     if (!UNIT_NAMES.includes(unitNumber.trim())) {
-      Alert.alert('שגיאה', 'יש לבחור יחידת נופש מתוך הרשימה (יחידה 1 עד יחידה 10)');
+      Alert.alert('שגיאה', 'יש לבחור יחידת נופש מתוך הרשימה');
       return;
     }
     if (Number.isNaN(totalNumber) || totalNumber <= 0) {
@@ -2477,7 +2755,12 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel }: OrderE
           </Pressable>
           {unitOpen ? (
             <View style={styles.selectList}>
-              {UNIT_NAMES.map(option => (
+              {UNIT_CATEGORIES.map(category => (
+                <View key={category.name}>
+                  <View style={styles.selectCategory}>
+                    <Text style={styles.selectCategoryText}>{category.name}</Text>
+                  </View>
+                  {category.units.map(option => (
                 <Pressable
                   key={option}
                   style={[
@@ -2498,6 +2781,8 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel }: OrderE
                     {option}
                   </Text>
                 </Pressable>
+                  ))}
+                </View>
               ))}
             </View>
           ) : null}
@@ -2887,6 +3172,7 @@ type OptionCardProps = {
 
 type ExitInspectionsProps = {
   missions: InspectionMission[];
+  defaultInspectionTasks: InspectionTask[];
   onUpdateMission: (id: string, updates: Partial<InspectionMission>) => void;
   onBack: () => void;
   safeAreaInsets: { top: number };
@@ -2895,24 +3181,146 @@ type ExitInspectionsProps = {
 
 function ExitInspectionsScreen({
   missions,
+  defaultInspectionTasks,
   onUpdateMission,
   onBack,
   safeAreaInsets,
   statusBar,
 }: ExitInspectionsProps) {
 
-  const toggleTask = (missionId: string, taskId: string) => {
+  const toggleTask = async (missionId: string, taskId: string) => {
     const mission = missions.find(m => m.id === missionId);
     if (!mission) return;
+    
+    const task = mission.tasks.find(t => t.id === taskId);
+    if (!task) return;
     
     const updatedTasks = mission.tasks.map(t =>
       t.id === taskId ? { ...t, completed: !t.completed } : t,
     );
 
+    const updatedStatus = computeInspectionStatus({ departureDate: mission.departureDate, tasks: updatedTasks });
+
+    // Update local state immediately (don't save to backend yet)
     onUpdateMission(missionId, {
       tasks: updatedTasks,
-      status: computeInspectionStatus({ departureDate: mission.departureDate, tasks: updatedTasks }),
+      status: updatedStatus,
     });
+  };
+
+  const handleSave = async (missionId: string) => {
+    // Get the latest mission from current state
+    const mission = missions.find(m => m.id === missionId);
+    if (!mission) {
+      console.error('Mission not found:', missionId);
+      Alert.alert('שגיאה', 'לא נמצאה משימת ביקורת');
+      return;
+    }
+
+    const completedCount = mission.tasks.filter(t => t.completed).length;
+    console.log('Saving mission:', missionId, 'with tasks:', mission.tasks.length, 'completed:', completedCount);
+    
+    // Ensure all tasks have the correct format with boolean completed status
+    // IMPORTANT: Match tasks to default tasks to ensure we use the correct IDs
+    // This ensures IDs match between saves and loads
+    const defaultTasksMap = new Map(defaultInspectionTasks.map(dt => [dt.name.trim().toLowerCase(), dt]));
+    
+    const tasksToSave = mission.tasks.map(t => {
+      // Find matching default task by name to get the correct ID
+      const taskName = String(t.name).trim().toLowerCase();
+      const defaultTask = defaultTasksMap.get(taskName);
+      const correctId = defaultTask ? String(defaultTask.id) : String(t.id);
+      
+      return {
+        id: correctId, // Use default task ID to ensure consistency
+        name: String(t.name),
+        completed: Boolean(t.completed), // Ensure it's a boolean
+      };
+    });
+    
+    console.log('Tasks to save:', tasksToSave.map(t => ({ id: t.id, name: t.name, completed: t.completed })));
+    console.log('Completed tasks count:', tasksToSave.filter(t => t.completed).length, 'out of', tasksToSave.length);
+    
+    // Save the entire mission with all tasks to backend
+    try {
+      const payload = {
+        id: mission.id,
+        orderId: mission.orderId,
+        unitNumber: mission.unitNumber,
+        guestName: mission.guestName,
+        departureDate: mission.departureDate,
+        status: mission.status,
+        tasks: tasksToSave, // Use the properly formatted tasks
+      };
+      
+      const response = await fetch(`${API_BASE_URL}/api/inspections`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.error('Error saving inspection:', response.status, errorText);
+        try {
+          const errorData = JSON.parse(errorText);
+          Alert.alert('שגיאה', `שגיאה בשמירה: ${errorData.detail || errorText}`);
+        } catch {
+          Alert.alert('שגיאה', `שגיאה בשמירה: ${response.status} ${errorText}`);
+        }
+        return;
+      }
+      
+      const result = await response.json().catch(() => null);
+      console.log('Inspection saved successfully:', missionId);
+      console.log('Response from backend:', JSON.stringify(result, null, 2));
+      
+      // Verify the response contains the tasks and check save status
+      if (result && result.tasks) {
+        const savedCompleted = result.completedTasksCount || result.tasks.filter((t: any) => t.completed).length;
+        const savedCount = result.savedTasksCount || result.tasks.length;
+        const totalCount = result.totalTasksCount || mission.tasks.length;
+        
+        console.log('Save summary:', {
+          saved: savedCount,
+          total: totalCount,
+          completed: savedCompleted,
+          expectedCompleted: completedCount,
+          tasksFromBackend: result.tasks.length
+        });
+        
+        // Always update local state with what backend returned (even if counts don't match)
+        // This ensures we show what was actually saved
+        const savedTasks = result.tasks.map((t: any) => ({
+          id: String(t.id),
+          name: String(t.name),
+          completed: Boolean(t.completed),
+        }));
+        
+        console.log('Updating local state with saved tasks:', savedTasks.map(t => ({ id: t.id, completed: t.completed })));
+        
+        // CRITICAL: Reload inspections from backend to ensure we have the latest data for ALL inspections
+        // This fixes the issue where the second inspection doesn't persist after refresh
+        console.log('Reloading ALL inspections from backend after save...');
+        await loadInspections();
+        
+        if (savedCount === totalCount && savedCompleted === completedCount) {
+          Alert.alert('הצלחה', `נשמר בהצלחה! ${completedCount}/${totalCount} משימות הושלמו`);
+        } else if (savedCount < totalCount) {
+          console.warn('Warning: Not all tasks were saved:', savedCount, 'of', totalCount);
+          Alert.alert('אזהרה', `נשמר חלקית: ${savedCount}/${totalCount} משימות נשמרו. ${savedCompleted} הושלמו.`);
+        } else {
+          console.warn('Warning: Saved completion count does not match:', savedCompleted, 'vs', completedCount);
+          Alert.alert('אזהרה', `נשמר, אך יש לבדוק: ${savedCompleted}/${totalCount} משימות הושלמו (צפוי: ${completedCount})`);
+        }
+      } else {
+        console.error('Backend response missing tasks:', result);
+        Alert.alert('אזהרה', 'נשמר, אך לא ניתן לאמת את השמירה - תגובת השרת לא כוללת משימות');
+      }
+    } catch (err: any) {
+      console.error('Error saving inspection to backend:', err);
+      Alert.alert('שגיאה', `שגיאה בשמירה: ${err.message || 'נסה שוב'}`);
+    }
   };
 
 
@@ -2952,6 +3360,7 @@ function ExitInspectionsScreen({
                   key={mission.id}
                   mission={mission}
                   onToggleTask={toggleTask}
+                  onSave={handleSave}
                 />
             ))}
           </View>
@@ -2961,14 +3370,85 @@ function ExitInspectionsScreen({
   );
 }
 
+type TaskCategory = {
+  name: string;
+  tasks: InspectionTask[];
+};
+
+function categorizeTasks(tasks: InspectionTask[]): TaskCategory[] {
+  const categories: { [key: string]: InspectionTask[] } = {
+    'טיפול ברכיה': [],
+    'טיפול גקוזי': [],
+    'ניקיון': [],
+    'בדיקות': [],
+    'כיבוי ונעילה': [],
+    'אחר': [],
+  };
+
+  tasks.forEach(task => {
+    const taskName = task.name.toLowerCase();
+    
+    // טיפול ברכיה
+    if (taskName.includes('רכיה') || taskName.includes('בריכה') || 
+        taskName.includes('כלור') || taskName.includes('רובוט') || 
+        taskName.includes('רשת') || taskName.includes('מנוע') || 
+        taskName.includes('פילטר') || taskName.includes('בקווש') ||
+        taskName.includes('מדרגות') || taskName.includes('רביצה')) {
+      categories['טיפול ברכיה'].push(task);
+    }
+    // טיפול גקוזי
+    else if (taskName.includes('גקוזי') || taskName.includes('ג\'קוזי')) {
+      categories['טיפול גקוזי'].push(task);
+    }
+    // ניקיון
+    else if (taskName.includes('ניקיון') || taskName.includes('פינוי') || 
+             taskName.includes('זבל') || taskName.includes('אשפה')) {
+      categories['ניקיון'].push(task);
+    }
+    // בדיקות
+    else if (taskName.includes('בדיק') || taskName.includes('תקינות') || 
+             taskName.includes('מכשיר') || taskName.includes('ריהוט') ||
+             taskName.includes('מצעים') || taskName.includes('מגבות') ||
+             taskName.includes('מלאי')) {
+      categories['בדיקות'].push(task);
+    }
+    // כיבוי ונעילה
+    else if (taskName.includes('כיבוי') || taskName.includes('אורות') || 
+             taskName.includes('נעיל') || taskName.includes('דלת')) {
+      categories['כיבוי ונעילה'].push(task);
+    }
+    // אחר
+    else {
+      categories['אחר'].push(task);
+    }
+  });
+
+  // Return only categories that have tasks, in a specific order
+  const orderedCategories: TaskCategory[] = [];
+  const categoryOrder = ['טיפול ברכיה', 'טיפול גקוזי', 'ניקיון', 'בדיקות', 'כיבוי ונעילה', 'אחר'];
+  
+  categoryOrder.forEach(categoryName => {
+    if (categories[categoryName].length > 0) {
+      orderedCategories.push({
+        name: categoryName,
+        tasks: categories[categoryName],
+      });
+    }
+  });
+
+  return orderedCategories;
+}
+
 type InspectionMissionCardProps = {
   mission: InspectionMission;
   onToggleTask: (missionId: string, taskId: string) => void;
+  onSave: (missionId: string) => void;
 };
 
 function InspectionMissionCard({
   mission,
   onToggleTask,
+  onSave,
 }: InspectionMissionCardProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -3057,8 +3537,10 @@ function InspectionMissionCard({
           </View>
 
           <View style={styles.tasksList}>
-            <Text style={styles.tasksTitle}>רשימת משימות:</Text>
-            {mission.tasks.map(task => (
+            {categorizeTasks(mission.tasks).map(category => (
+              <View key={category.name} style={styles.taskCategory}>
+                <Text style={styles.taskCategoryTitle}>{category.name}</Text>
+                {category.tasks.map(task => (
               <Pressable
                 key={task.id}
                 onPress={(e) => {
@@ -3084,7 +3566,24 @@ function InspectionMissionCard({
                   {task.name}
                 </Text>
               </Pressable>
+                ))}
+              </View>
             ))}
+          </View>
+
+          <View style={styles.saveSection}>
+            <Pressable
+              onPress={(e) => {
+                e.stopPropagation();
+                onSave(mission.id);
+              }}
+              style={({ pressed }) => [
+                styles.saveButton,
+                pressed && { opacity: 0.9 },
+              ]}
+            >
+              <Text style={styles.saveButtonText}>שמור</Text>
+            </Pressable>
           </View>
         </>
       )}
@@ -6211,9 +6710,8 @@ function MaintenanceTaskDetailScreen({
 
   const handleCloseModalImageSelect = async () => {
     try {
-      const result = await launchImageLibrary({
+      const result = await launchCamera({
         mediaType: 'mixed', // Allow both photos and videos
-        selectionLimit: 1,
         includeBase64: true,
       });
       if (result.didCancel) return;
@@ -6237,9 +6735,8 @@ function MaintenanceTaskDetailScreen({
 
   const handleEditMediaSelect = async () => {
     try {
-      const result = await launchImageLibrary({
+      const result = await launchCamera({
         mediaType: 'mixed', // Allow both photos and videos
-        selectionLimit: 1,
         includeBase64: true,
       });
       if (result.didCancel) return;
@@ -6635,9 +7132,8 @@ function NewMaintenanceTaskScreen({
 
   const handlePickMedia = async () => {
     try {
-      const result = await launchImageLibrary({
+      const result = await launchCamera({
         mediaType: 'mixed', // Allow both photos and videos
-        selectionLimit: 1,
         includeBase64: true,
       });
       if (result.didCancel) return;
@@ -7448,9 +7944,8 @@ function InvoicesScreen({
   const handlePickImage = async () => {
     try {
       console.log('handlePickImage called');
-      const result = await launchImageLibrary({
+      const result = await launchCamera({
         mediaType: 'photo',
-        selectionLimit: 1,
         includeBase64: true,
       });
       console.log('Image picker result:', result);
@@ -8475,6 +8970,20 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: '#fff',
     overflow: 'hidden',
+    maxHeight: 400,
+  },
+  selectCategory: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#f8fafc',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  selectCategoryText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+    textAlign: 'right',
   },
   selectItem: {
     paddingHorizontal: 12,
@@ -9035,14 +9544,20 @@ const styles = StyleSheet.create({
   },
   tasksList: {
     marginTop: 12,
+    gap: 16,
+  },
+  taskCategory: {
     gap: 8,
   },
-  tasksTitle: {
+  taskCategoryTitle: {
     fontSize: 15,
-    fontWeight: '700',
-    color: '#0f172a',
+    fontWeight: '800',
+    color: '#2563eb',
     textAlign: 'right',
-    marginBottom: 8,
+    marginBottom: 4,
+    paddingBottom: 6,
+    borderBottomWidth: 2,
+    borderBottomColor: '#e0f2fe',
   },
   taskItem: {
     flexDirection: 'row-reverse',
@@ -9078,6 +9593,29 @@ const styles = StyleSheet.create({
   taskTextCompleted: {
     textDecorationLine: 'line-through',
     color: '#94a3b8',
+  },
+  saveSection: {
+    marginTop: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    alignItems: 'center',
+  },
+  saveButton: {
+    backgroundColor: '#2563eb',
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  saveButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
   warehouseHeader: {
     flexDirection: 'row-reverse',
