@@ -1542,27 +1542,8 @@ function AppContent() {
               </Text>
             </View>
 
-            <View style={styles.glassRow}>
-              <View style={styles.glassCard}>
-                <Text style={styles.glassTitle}>הזמנות פעילות</Text>
-                <Text style={styles.glassValue}>{totals.count}</Text>
-                <Text style={styles.glassSmall}>היום במערכת</Text>
-              </View>
-              <View style={styles.glassCard}>
-                <Text style={styles.glassTitle}>תשלומים מאושרים</Text>
-                <Text style={styles.glassValue}>
-                  ₪{totals.totalPaid.toLocaleString('he-IL')}
-                </Text>
-                <Text style={styles.glassSmall}>עדכון חי</Text>
-              </View>
-            </View>
-
             <View style={styles.ctaCard}>
               <Text style={styles.ctaTitle}>התחברות מהירה</Text>
-              <Text style={styles.ctaText}>
-                המשיכו לניהול מלא של Seisignes: ביקורות יציאה, חשבוניות, מחסן
-                ותקשורת צוות.
-              </Text>
               <View style={styles.ctaButtons}>
                 <PrimaryButton
                   label="כניסה"
@@ -1574,24 +1555,6 @@ function AppContent() {
                   onPress={() => setScreen('signup')}
                   style={styles.ctaOutline}
                 />
-              </View>
-              <Pressable
-                onPress={() => showNotification('בדיקת התראות', 'זוהי הודעת בדיקה. התראות פועלות כהלכה!')}
-                style={styles.testNotificationButton}
-              >
-                <Text style={styles.testNotificationButtonText}>🔔 בדיקת התראות</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.tagRow}>
-              <View style={styles.tag}>
-                <Text style={styles.tagText}>זמני הגעה</Text>
-              </View>
-              <View style={styles.tag}>
-                <Text style={styles.tagText}>ביקורות יציאה</Text>
-              </View>
-              <View style={styles.tag}>
-                <Text style={styles.tagText}>צ׳אט צוות</Text>
               </View>
             </View>
           </ScrollView>
