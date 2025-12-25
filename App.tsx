@@ -769,57 +769,29 @@ function AppContent() {
   // Use a ref to track if we've loaded from backend to prevent overwriting
   const hasLoadedFromBackend = React.useRef(false);
   
-  // Always sync missions from orders to ensure every departure date has an inspection
+  // Sync inspections when orders change - ensure inspections table stays in sync with orders
   // Group by departure date - one mission per departure date
-  // BUT: Don't overwrite missions that were loaded from backend - they have saved completion status
   useEffect(() => {
-    if (orders.length > 0 && !hasLoadedFromBackend.current) {
+    if (orders.length > 0 && hasLoadedFromBackend.current) {
+      // Sync inspections with backend when orders change
+      const syncWithBackend = async () => {
+        try {
+          await fetch(`${API_BASE_URL}/api/inspections/sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          // Reload inspections after syncing
+          await loadInspections();
+        } catch (err) {
+          console.error('Error syncing inspections with backend:', err);
+        }
+      };
+      syncWithBackend();
+    } else if (orders.length > 0 && !hasLoadedFromBackend.current) {
       // Only derive if we haven't loaded from backend yet (initial load)
       deriveMissionsFromOrders();
-    } else if (orders.length > 0 && inspectionMissions.length > 0) {
-      // After backend load, only add missing missions for departure dates, don't overwrite existing ones
-      setInspectionMissions(prev => {
-        const prevByDate = new Map<string, InspectionMission>();
-        (prev || []).forEach(m => {
-          const date = m.departureDate;
-          const existing = prevByDate.get(date);
-          if (!existing || (existing.tasks.filter(t => t.completed).length < m.tasks.filter(t => t.completed).length)) {
-            prevByDate.set(date, m);
-          }
-        });
-        
-        const next = [...(prev || [])];
-        const ordersByDate = new Map<string, Order[]>();
-        (orders || [])
-          .filter(o => o.status !== 'בוטל')
-          .forEach(o => {
-            const date = o.departureDate;
-            if (!ordersByDate.has(date)) {
-              ordersByDate.set(date, []);
-            }
-            ordersByDate.get(date)!.push(o);
-          });
-        
-        ordersByDate.forEach((ordersForDate, date) => {
-          // Only add if this departure date doesn't have an inspection yet
-          if (!prevByDate.has(date)) {
-            const firstOrder = ordersForDate[0];
-            const tasks = defaultInspectionTasks.map(t => ({ ...t }));
-            next.push({
-              id: `INSP-${date}`,
-              orderId: firstOrder.id, // Keep first order ID for reference
-              unitNumber: firstOrder.unitNumber,
-              guestName: ordersForDate.map(o => o.guestName).join(', '), // Combine guest names
-              departureDate: date,
-              tasks,
-              status: computeInspectionStatus({ departureDate: date, tasks }),
-            });
-          }
-        });
-        return next;
-      });
     }
-  }, [orders, defaultInspectionTasks, inspectionMissions.length]);
+  }, [orders.length]); // Only trigger when number of orders changes
 
   const loadChatMessages = async () => {
     try {
@@ -3357,6 +3329,15 @@ function ExitInspectionsScreen({
         </Pressable>
       </View>
       <ScrollView contentContainerStyle={styles.scroll}>
+        {/* Hotel name - show from first mission */}
+        {missions.length > 0 && missions[0].unitNumber && (
+          <View style={styles.hotelNameContainer}>
+            <Text style={styles.hotelNameText}>
+              {missions[0].unitNumber}
+            </Text>
+          </View>
+        )}
+        
         <View style={styles.inspectionsHeader}>
           <View>
             <Text style={styles.title}>ביקורת יציאת אורח</Text>
@@ -9487,6 +9468,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#64748b',
     textAlign: 'center',
+  },
+  hotelNameContainer: {
+    marginBottom: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  hotelNameText: {
+    fontSize: 24,
+    fontWeight: '800',
+    textAlign: 'right',
+    color: '#0f172a',
   },
   inspectionsHeader: {
     flexDirection: 'row-reverse',
