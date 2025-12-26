@@ -2272,6 +2272,28 @@ function AppContent() {
           }
         }}
         onCancel={() => setScreen('orders')}
+        onDelete={async (id) => {
+          try {
+            const res = await fetch(`${API_BASE_URL}/api/orders/${id}`, {
+              method: 'DELETE',
+            });
+
+            if (!res.ok) {
+              const errorText = await res.text().catch(() => '');
+              console.error('Failed to delete order:', res.status, errorText);
+              Alert.alert('שגיאה', `לא ניתן למחוק את ההזמנה: ${res.status}`);
+              return;
+            }
+
+            // Remove from local state
+            setOrders(prev => prev.filter(o => o.id !== id));
+            Alert.alert('הצלחה', 'ההזמנה נמחקה בהצלחה');
+            setScreen('orders');
+          } catch (err: any) {
+            console.error('Error deleting order:', err);
+            Alert.alert('שגיאה', 'לא ניתן למחוק את ההזמנה');
+          }
+        }}
       />
     );
   }
@@ -3052,9 +3074,10 @@ type OrderEditProps = {
     >,
   ) => void;
   onCancel: () => void;
+  onDelete?: (id: string) => void;
 };
 
-function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel }: OrderEditProps) {
+function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete }: OrderEditProps) {
   const [status, setStatus] = useState<OrderStatus>(order.status);
   const [paid, setPaid] = useState(order.paidAmount.toString());
   const [method, setMethod] = useState(order.paymentMethod);
@@ -3451,6 +3474,30 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel }: OrderE
           <View style={styles.editActions}>
             <PrimaryButton label="שמירה" onPress={saveEdit} />
             <OutlineButton label="ביטול" onPress={onCancel} />
+            {!isNewOrder && onDelete && (
+              <Pressable
+                onPress={() => {
+                  Alert.alert(
+                    'מחיקת הזמנה',
+                    'האם אתה בטוח שברצונך למחוק את ההזמנה? פעולה זו לא ניתנת לביטול.',
+                    [
+                      { text: 'ביטול', style: 'cancel' },
+                      {
+                        text: 'מחק',
+                        style: 'destructive',
+                        onPress: () => onDelete(order.id),
+                      },
+                    ],
+                  );
+                }}
+                style={({ pressed }) => [
+                  styles.deleteButton,
+                  pressed && { opacity: 0.9 },
+                ]}
+              >
+                <Text style={styles.deleteButtonText}>מחק הזמנה</Text>
+              </Pressable>
+            )}
           </View>
         </View>
       </ScrollView>
@@ -11601,6 +11648,21 @@ const styles = StyleSheet.create({
   editActions: {
     marginTop: 16,
     gap: 10,
+  },
+  deleteButton: {
+    width: '100%',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dc2626',
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+  },
+  deleteButtonText: {
+    color: '#dc2626',
+    fontWeight: '700',
+    fontSize: 15,
   },
   addPaymentRow: {
     flexDirection: 'row',
