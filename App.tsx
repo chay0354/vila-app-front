@@ -46,7 +46,7 @@ try {
 
 import { API_BASE_URL } from './src/apiConfig';
 
-type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'exitInspections' | 'warehouse' | 'warehouseMenu' | 'warehouseOrders' | 'warehouseInventory' | 'warehouseInventoryDetail' | 'newWarehouse' | 'newWarehouseItem' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask' | 'reports' | 'chat' | 'attendance' | 'invoices' | 'cleaningSchedule';
+type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'exitInspections' | 'cleaningInspections' | 'warehouse' | 'warehouseMenu' | 'warehouseOrders' | 'warehouseInventory' | 'warehouseInventoryDetail' | 'newWarehouse' | 'newWarehouseItem' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask' | 'reports' | 'chat' | 'attendance' | 'invoices' | 'cleaningSchedule';
 type OrderStatus = 'חדש' | 'באישור' | 'שולם חלקית' | 'שולם' | 'בוטל';
 type InspectionStatus =
   | 'זמן הביקורות טרם הגיע'
@@ -106,7 +106,7 @@ type InventoryOrder = {
   id: string;
   orderDate: string;
   deliveryDate?: string;
-  status: 'ממתין לאישור' | 'מאושר' | 'בהזמנה' | 'התקבל' | 'בוטל';
+  status: 'שולם מלא' | 'מחכה להשלמת תשלום';
   orderType: 'הזמנת עובד' | 'הזמנה כללית';
   orderedBy?: string;
   unitNumber?: string;
@@ -324,7 +324,7 @@ const initialInventoryOrders: InventoryOrder[] = [
     unit: 'סט',
     orderDate: '2025-12-15',
     deliveryDate: '2025-12-20',
-    status: 'מאושר',
+    status: 'שולם מלא',
     orderType: 'הזמנה כללית',
   },
   {
@@ -334,7 +334,7 @@ const initialInventoryOrders: InventoryOrder[] = [
     quantity: 15,
     unit: 'ליטר',
     orderDate: '2025-12-18',
-    status: 'ממתין לאישור',
+    status: 'מחכה להשלמת תשלום',
     orderType: 'הזמנת עובד',
     orderedBy: 'שירה לוי',
     unitNumber: UNIT_NAMES[0] || '',
@@ -361,6 +361,11 @@ function AppContent() {
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [role, setRole] = useState<'עובד תחזוקה' | 'מנהל'>('עובד תחזוקה');
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [userImageUrl, setUserImageUrl] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [userName, setUserName] = useState<string | null>(null);
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
@@ -369,6 +374,7 @@ function AppContent() {
   const [screen, setScreen] = useState<Screen>('home');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [inspectionMissions, setInspectionMissions] = useState<InspectionMission[]>([]);
+  const [cleaningInspectionMissions, setCleaningInspectionMissions] = useState<InspectionMission[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>(initialInventoryItems);
   const [inventoryOrders, setInventoryOrders] = useState<InventoryOrder[]>(initialInventoryOrders);
   const [warehouses, setWarehouses] = useState<Array<{id: string; name: string; location?: string}>>([]);
@@ -535,7 +541,27 @@ function AppContent() {
   ], []);
 
   // Load inspections from backend
+  const syncInspectionsWithOrders = async () => {
+    try {
+      // Call backend sync endpoint which handles adding and removing inspections
+      // The backend will fetch orders itself, so we don't need to check orders.length
+      const res = await fetch(`${API_BASE_URL}/api/inspections/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        console.log('Synced inspections with orders via backend');
+      } else {
+        console.error('Sync failed with status:', res.status);
+      }
+    } catch (err) {
+      console.error('Error syncing inspections with orders:', err);
+    }
+  };
+
   const loadInspections = async () => {
+    // First, sync inspections with orders to ensure all departure dates have inspections
+    await syncInspectionsWithOrders();
     try {
       const res = await fetch(`${API_BASE_URL}/api/inspections`);
       if (res.ok) {
@@ -765,6 +791,41 @@ function AppContent() {
   useEffect(() => {
     loadInspections();
   }, []);
+
+  const syncCleaningInspectionsWithOrders = async () => {
+    try {
+      // Call backend sync endpoint which handles adding and removing cleaning inspections
+      // The backend will fetch orders itself, so we don't need to check orders.length
+      const res = await fetch(`${API_BASE_URL}/api/cleaning-inspections/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        console.log('Synced cleaning inspections with orders via backend');
+      } else {
+        console.error('Cleaning inspections sync failed with status:', res.status);
+      }
+    } catch (err) {
+      console.error('Error syncing cleaning inspections with orders:', err);
+    }
+  };
+
+  // Sync and reload inspections when screen opens
+  useEffect(() => {
+    if (screen === 'exitInspections') {
+      const syncAndLoad = async () => {
+        await syncInspectionsWithOrders();
+        await loadInspections();
+      };
+      syncAndLoad();
+    } else if (screen === 'cleaningInspections') {
+      const syncAndLoad = async () => {
+        await syncCleaningInspectionsWithOrders();
+        // TODO: Add loadCleaningInspections() when cleaning inspections screen is implemented
+      };
+      syncAndLoad();
+    }
+  }, [screen]);
 
   // Use a ref to track if we've loaded from backend to prevent overwriting
   const hasLoadedFromBackend = React.useRef(false);
@@ -1195,7 +1256,7 @@ function AppContent() {
       
       // Handle both new structure (with items array) and old structure (flat)
       const list = (data || []).map((o: any): InventoryOrder => {
-        const status = (o.status ?? 'ממתין לאישור') as InventoryOrder['status'];
+        const status = (o.status ?? 'מחכה להשלמת תשלום') as InventoryOrder['status'];
         const orderType = (o.order_type ?? o.orderType ?? 'הזמנה כללית') as InventoryOrder['orderType'];
         
         // New structure: orders have items array
@@ -1404,6 +1465,31 @@ function AppContent() {
     }
   }, [screen, selectedWarehouseId]);
 
+  const handlePickImage = () => {
+    const options: any = {
+      mediaType: 'photo' as const,
+      quality: 0.8,
+      maxWidth: 800,
+      maxHeight: 800,
+      includeBase64: true,
+    };
+    
+    launchImageLibrary(options, (response) => {
+      if (response.didCancel) {
+        console.log('User cancelled image picker');
+      } else if (response.errorMessage) {
+        Alert.alert('שגיאה', 'שגיאה בבחירת תמונה');
+      } else if (response.assets && response.assets[0]) {
+        setImageUri(response.assets[0].uri || null);
+        if (response.assets[0].base64) {
+          setImageBase64(`data:image/jpeg;base64,${response.assets[0].base64}`);
+        } else {
+          setImageBase64(null);
+        }
+      }
+    });
+  };
+
   const handleSign = async (mode: 'signin' | 'signup') => {
     if (!name.trim() || !password.trim()) {
       setError('אנא מלאו שם וסיסמה');
@@ -1421,6 +1507,13 @@ function AppContent() {
     setError('');
     
     try {
+      let imageUrl: string | undefined = undefined;
+      
+      // If signup and image selected, use stored base64
+      if (mode === 'signup' && imageBase64) {
+        imageUrl = imageBase64;
+      }
+
       const endpoint = mode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
       const url = `${API_BASE_URL}${endpoint}`;
       console.log('Attempting auth:', { mode, url, username: name.trim() });
@@ -1431,6 +1524,7 @@ function AppContent() {
         body: JSON.stringify({
           username: name.trim(),
           password: password,
+          ...(mode === 'signup' && { role, image_url: imageUrl }),
         }),
       });
       
@@ -1456,10 +1550,14 @@ function AppContent() {
       
       // Success - set user and navigate to hub
       setUserName(data.username || name.trim());
+      setUserRole(data.role || null);
+      setUserImageUrl(data.image_url || null);
       setScreen('hub');
       setName('');
       setPassword('');
       setConfirmPassword('');
+      setImageUri(null);
+      setImageBase64(null);
     } catch (err: any) {
       console.error('Auth error:', err);
       const errorMsg = err.message || 'אירעה שגיאה בחיבור לשרת. נסה שוב.';
@@ -1630,18 +1728,62 @@ function AppContent() {
               />
             </View>
             {screen === 'signup' ? (
-              <View style={styles.field}>
-                <Text style={styles.label}>אישור סיסמה</Text>
-                <TextInput
-                  style={styles.input}
-                  value={confirmPassword}
-                  onChangeText={setConfirmPassword}
-                  placeholder="••••••"
-                  placeholderTextColor="#94a3b8"
-                  secureTextEntry
-                  textAlign="right"
-                />
-              </View>
+              <>
+                <View style={styles.field}>
+                  <Text style={styles.label}>אישור סיסמה</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    placeholder="••••••"
+                    placeholderTextColor="#94a3b8"
+                    secureTextEntry
+                    textAlign="right"
+                  />
+                </View>
+                <View style={styles.field}>
+                  <Text style={styles.label}>תפקיד</Text>
+                  <View style={styles.pickerContainer}>
+                    <Pressable
+                      style={[styles.pickerButton, role === 'עובד תחזוקה' && styles.pickerButtonSelected]}
+                      onPress={() => setRole('עובד תחזוקה')}
+                    >
+                      <Text style={[styles.pickerButtonText, role === 'עובד תחזוקה' && styles.pickerButtonTextSelected]}>
+                        עובד תחזוקה
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.pickerButton, role === 'מנהל' && styles.pickerButtonSelected]}
+                      onPress={() => setRole('מנהל')}
+                    >
+                      <Text style={[styles.pickerButtonText, role === 'מנהל' && styles.pickerButtonTextSelected]}>
+                        מנהל
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+                <View style={styles.field}>
+                  <Text style={styles.label}>תמונת פרופיל</Text>
+                  {imageUri ? (
+                    <View style={styles.imagePreviewContainer}>
+                      <Image source={{ uri: imageUri }} style={styles.imagePreview} />
+                      <Pressable
+                        style={styles.removeImageButton}
+                        onPress={() => {
+                          setImageUri(null);
+                          setImageBase64(null);
+                        }}
+                      >
+                        <Text style={styles.removeImageButtonText}>✕</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <Pressable style={styles.imageUploadButton} onPress={handlePickImage}>
+                      <Text style={styles.imageUploadButtonText}>+ בחר תמונה</Text>
+                    </Pressable>
+                  )}
+                </View>
+              </>
             ) : null}
             {error ? <Text style={styles.error}>{error}</Text> : null}
             <PrimaryButton
@@ -1721,71 +1863,121 @@ function AppContent() {
             </View>
           </View>
 
-          <View style={styles.progressSection}>
-            <Text style={styles.sectionTitle}>סטטוס תשלומים</Text>
-            <View style={styles.progressCard}>
-              <View style={styles.progressInfo}>
-                <Text style={styles.progressLabel}>שולם: ₪{totals.totalPaid.toLocaleString('he-IL')}</Text>
-                <Text style={styles.progressPercent}>
-                  {totalRevenue > 0 ? Math.round((totals.totalPaid / totalRevenue) * 100) : 0}%
-                </Text>
+          <View style={styles.welcomeSection}>
+            <View style={styles.welcomeCard}>
+              <View style={styles.welcomeAvatar}>
+                {userImageUrl ? (
+                  <Image source={{ uri: userImageUrl }} style={styles.welcomeAvatarImage} />
+                ) : (
+                  <View style={styles.welcomeAvatarPlaceholder}>
+                    <Text style={styles.welcomeAvatarIcon}>👤</Text>
+                  </View>
+                )}
               </View>
-              <View style={styles.progressBarLarge}>
-                <View
-                  style={[
-                    styles.progressFillLarge,
-                    {
-                      width: `${totalRevenue > 0 ? (totals.totalPaid / totalRevenue) * 100 : 0}%`,
-                    },
-                  ]}
-                />
+              <View style={styles.welcomeContent}>
+                <Text style={styles.welcomeTitle}>שלום {userName}</Text>
+                <Text style={styles.welcomeSubtitle}>ברוך הבא למערכת הניהול</Text>
               </View>
-              <Text style={styles.progressNote}>
-                מתוך ₪{totalRevenue.toLocaleString('he-IL')} סה״כ
-              </Text>
             </View>
           </View>
 
           <View style={styles.quickActions}>
-            <Text style={styles.sectionTitle}>פעולות מהירות</Text>
+            <Text style={styles.sectionTitle}>אפשרויות</Text>
             <View style={styles.quickActionsRow}>
+              {userRole === 'מנהל' && (
+                <Pressable
+                  style={[styles.quickActionBtn, { backgroundColor: '#3b82f6' }]}
+                  onPress={() => setScreen('orders')}
+                >
+                  <Text style={styles.quickActionIcon}>📑</Text>
+                  <Text style={styles.quickActionText}>הזמנות</Text>
+                </Pressable>
+              )}
               <Pressable
-                style={[styles.quickActionBtn, { backgroundColor: '#3b82f6' }]}
-                onPress={() => setScreen('orders')}
-              >
-                <Text style={styles.quickActionIcon}>📑</Text>
-                <Text style={styles.quickActionText}>הזמנות</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.quickActionBtn, { backgroundColor: '#22c55e' }]}
-                onPress={() => {}}
+                style={[styles.quickActionBtn, { backgroundColor: '#f97316' }]}
+                onPress={() => setScreen('exitInspections')}
               >
                 <Text style={styles.quickActionIcon}>🧹</Text>
-                <Text style={styles.quickActionText}>ביקורת</Text>
+                <Text style={styles.quickActionText}>ביקורת יציאה</Text>
               </Pressable>
               <Pressable
-                style={[styles.quickActionBtn, { backgroundColor: '#f59e0b' }]}
-                onPress={() => {}}
+                style={[styles.quickActionBtn, { backgroundColor: '#84cc16' }]}
+                onPress={() => setScreen('cleaningInspections')}
+              >
+                <Text style={styles.quickActionIcon}>✨</Text>
+                <Text style={styles.quickActionText}>ביקורת ניקיון</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.quickActionBtn, { backgroundColor: '#a78bfa' }]}
+                onPress={() => setScreen('warehouse')}
               >
                 <Text style={styles.quickActionIcon}>📦</Text>
                 <Text style={styles.quickActionText}>מחסן</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.quickActionBtn, { backgroundColor: '#22c55e' }]}
+                onPress={() => setScreen('maintenance')}
+              >
+                <Text style={styles.quickActionIcon}>🛠️</Text>
+                <Text style={styles.quickActionText}>תחזוקה</Text>
+              </Pressable>
+              {userRole === 'מנהל' && (
+                <>
+                  <Pressable
+                    style={[styles.quickActionBtn, { backgroundColor: '#6366f1' }]}
+                    onPress={() => setScreen('reports')}
+                  >
+                    <Text style={styles.quickActionIcon}>📊</Text>
+                    <Text style={styles.quickActionText}>דוחות</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.quickActionBtn, { backgroundColor: '#0ea5e9' }]}
+                    onPress={() => setScreen('invoices')}
+                  >
+                    <Text style={styles.quickActionIcon}>🧾</Text>
+                    <Text style={styles.quickActionText}>חשבוניות</Text>
+                  </Pressable>
+                </>
+              )}
+              <Pressable
+                style={[styles.quickActionBtn, { backgroundColor: '#eab308' }]}
+                onPress={() => setScreen('chat')}
+              >
+                <Text style={styles.quickActionIcon}>💬</Text>
+                <Text style={styles.quickActionText}>צ׳אט פנימי</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.quickActionBtn, { backgroundColor: '#ec4899' }]}
+                onPress={() => setScreen('attendance')}
+              >
+                <Text style={styles.quickActionIcon}>⏱️</Text>
+                <Text style={styles.quickActionText}>שעון נוכחות</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.quickActionBtn, { backgroundColor: '#10b981' }]}
+                onPress={() => setScreen('cleaningSchedule')}
+              >
+                <Text style={styles.quickActionIcon}>🧹</Text>
+                <Text style={styles.quickActionText}>סידורי ניקיון</Text>
               </Pressable>
             </View>
           </View>
 
           <View style={styles.optionGrid}>
-            <OptionCard
-              title="הזמנות"
-              icon="📑"
-              accent="#38bdf8"
-              details={[
-                'רשימת הזמנות מלאה, פרטי אורח ומספר יחידה',
-                'עדכון סכום ששולם, אופן תשלום וסטטוס',
-                'סיכום מלא והוצאות כולל יצוא לאקסל',
-              ]}
-              cta="פתח הזמנות"
-              onPress={() => setScreen('orders')}
-            />
+            {userRole === 'מנהל' && (
+              <OptionCard
+                title="הזמנות"
+                icon="📑"
+                accent="#38bdf8"
+                details={[
+                  'רשימת הזמנות מלאה, פרטי אורח ומספר יחידה',
+                  'עדכון סכום ששולם, אופן תשלום וסטטוס',
+                  'סיכום מלא והוצאות כולל יצוא לאקסל',
+                ]}
+                cta="פתח הזמנות"
+                onPress={() => setScreen('orders')}
+              />
+            )}
             <OptionCard
               title="ביקורת יציאה"
               icon="🧹"
@@ -1796,6 +1988,17 @@ function AppContent() {
               ]}
               cta="פתח ביקורות"
               onPress={() => setScreen('exitInspections')}
+            />
+            <OptionCard
+              title="ביקורת ניקיון"
+              icon="✨"
+              accent="#84cc16"
+              details={[
+                'משימות ניקיון מפורטות: מטבח, סלון, מסדרון, חצר',
+                'סטטוסים: צריך ביקורת / בביצוע / הושלם',
+              ]}
+              cta="פתח ביקורות ניקיון"
+              onPress={() => setScreen('cleaningInspections')}
             />
             <OptionCard
               title="מחסן"
@@ -1821,25 +2024,29 @@ function AppContent() {
               cta="פתח תחזוקה"
               onPress={() => setScreen('maintenance')}
             />
-            <OptionCard
-              title="דוחות"
-              icon="דוח"
-              accent="#6366f1"
-              details={[
-                'דוח הזמנות, ביקורות, מחסן, תחזוקה ונוכחות',
-                'הכנסות/שולם/הוצאות מהשרת',
-              ]}
-              cta="פתח דוחות"
-              onPress={() => setScreen('reports')}
-            />
-            <OptionCard
-              title="חשבוניות"
-              icon="🧾"
-              accent="#0ea5e9"
-              details={['העלאת PDF/תמונה', 'OCR לזיהוי ספק, תאריך וסכום']}
-              cta="פתח חשבוניות"
-              onPress={() => setScreen('invoices')}
-            />
+            {userRole === 'מנהל' && (
+              <>
+                <OptionCard
+                  title="דוחות"
+                  icon="דוח"
+                  accent="#6366f1"
+                  details={[
+                    'דוח הזמנות, ביקורות, מחסן, תחזוקה ונוכחות',
+                    'הכנסות/שולם/הוצאות מהשרת',
+                  ]}
+                  cta="פתח דוחות"
+                  onPress={() => setScreen('reports')}
+                />
+                <OptionCard
+                  title="חשבוניות"
+                  icon="🧾"
+                  accent="#0ea5e9"
+                  details={['העלאת PDF/תמונה', 'OCR לזיהוי ספק, תאריך וסכום']}
+                  cta="פתח חשבוניות"
+                  onPress={() => setScreen('invoices')}
+                />
+              </>
+            )}
             <OptionCard
               title="צ׳אט פנימי"
               icon="💬"
@@ -4162,15 +4369,21 @@ function WarehouseScreen({
   userName,
 }: WarehouseScreenProps) {
   const [expandedOrderGroupId, setExpandedOrderGroupId] = useState<string | null>(null);
-  const [statusChangeGroupId, setStatusChangeGroupId] = useState<string | null>(null);
 
-  // With new structure, each order already contains its items
-  // No need to group - each order is already a complete order
+  // Group orders by hotel (unitNumber)
   const groupedOrders = useMemo(() => {
     const groups: Record<string, InventoryOrder[]> = {};
-    // Each order is its own group (since items are already in the order)
     orders.forEach(order => {
-      groups[order.id] = [order];
+      // Group by hotel (unitNumber) or 'ללא מלון' if no hotel
+      const hotelKey = order.unitNumber || 'ללא מלון';
+      if (!groups[hotelKey]) {
+        groups[hotelKey] = [];
+      }
+      groups[hotelKey].push(order);
+    });
+    // Sort orders within each group by date (newest first)
+    Object.keys(groups).forEach(key => {
+      groups[key].sort((a, b) => (b.orderDate || '').localeCompare(a.orderDate || ''));
     });
     return groups;
   }, [orders]);
@@ -4183,31 +4396,6 @@ function WarehouseScreen({
     }
   };
 
-  const handleStatusChange = (groupId: string, newStatus: InventoryOrder['status']) => {
-    const groupOrders = groupedOrders[groupId] || [];
-    // Update the order (with new structure, each group has one order)
-    if (groupOrders.length > 0) {
-      onUpdateOrder(groupOrders[0].id, { status: newStatus });
-    }
-    setStatusChangeGroupId(null);
-  };
-
-  const getStatusColor = (status: InventoryOrder['status']) => {
-    switch (status) {
-      case 'ממתין לאישור':
-        return '#f59e0b';
-      case 'מאושר':
-        return '#3b82f6';
-      case 'בהזמנה':
-        return '#8b5cf6';
-      case 'התקבל':
-        return '#22c55e';
-      case 'בוטל':
-        return '#ef4444';
-      default:
-        return '#64748b';
-    }
-  };
 
   return (
     <SafeAreaView
@@ -4245,14 +4433,20 @@ function WarehouseScreen({
               <Text style={styles.emptyStateText}>אין הזמנות כרגע</Text>
             </View>
           ) : (
-            Object.entries(groupedOrders).map(([groupId, groupOrders]) => {
-              const order = groupOrders[0]; // With new structure, each group has one order
-              const isExpanded = expandedOrderGroupId === groupId;
-              const isChangingStatus = statusChangeGroupId === groupId;
-              const itemCount = order.items?.length || 0;
-              
-              return (
-                <View key={groupId} style={styles.orderCard}>
+            Object.entries(groupedOrders).map(([hotelName, groupOrders]) => (
+              <View key={hotelName}>
+                <View style={styles.hotelGroupTitle}>
+                  <Text style={styles.hotelGroupTitleText}>
+                    {hotelName} ({groupOrders.length} {groupOrders.length === 1 ? 'הזמנה' : 'הזמנות'})
+                  </Text>
+                </View>
+                {groupOrders.map((order) => {
+                  const groupId = order.id;
+                  const isExpanded = expandedOrderGroupId === groupId;
+                  const itemCount = order.items?.length || 0;
+                  
+                  return (
+                    <View key={groupId} style={styles.orderCard}>
                   <Pressable
                     onPress={() => handleToggleOrder(groupId)}
                     style={styles.orderCardHeader}
@@ -4292,67 +4486,18 @@ function WarehouseScreen({
                         </View>
                       )}
                     </View>
-                    <View
-                      style={[
-                        styles.orderStatusBadge,
-                        { backgroundColor: getStatusColor(order.status) + '22' },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.orderStatusText,
-                          { color: getStatusColor(order.status) },
-                        ]}
-                      >
-                        {order.status}
-                      </Text>
-                    </View>
                   </Pressable>
                   
                   <View style={styles.orderCardActions}>
                     <View style={styles.orderTypeBadge}>
                       <Text style={styles.orderTypeText}>{order.orderType}</Text>
                     </View>
-                    {!isChangingStatus ? (
-                      <Pressable
-                        onPress={() => setStatusChangeGroupId(groupId)}
-                        style={styles.changeStatusButton}
-                      >
-                        <Text style={styles.changeStatusButtonText}>שינוי סטטוס</Text>
-                      </Pressable>
-                    ) : (
-                      <View style={styles.statusChangeButtons}>
-                        {(['ממתין לאישור', 'מאושר', 'בהזמנה', 'התקבל', 'בוטל'] as InventoryOrder['status'][]).map(status => (
-                          <Pressable
-                            key={status}
-                            onPress={() => handleStatusChange(groupId, status)}
-                            style={[
-                              styles.statusOptionButton,
-                              order.status === status && styles.statusOptionButtonActive,
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.statusOptionText,
-                                order.status === status && styles.statusOptionTextActive,
-                              ]}
-                            >
-                              {status}
-                            </Text>
-                          </Pressable>
-                        ))}
-                        <Pressable
-                          onPress={() => setStatusChangeGroupId(null)}
-                          style={styles.cancelStatusButton}
-                        >
-                          <Text style={styles.cancelStatusButtonText}>ביטול</Text>
-                        </Pressable>
-                      </View>
-                    )}
                   </View>
                 </View>
-              );
-            })
+                  );
+                })}
+              </View>
+            ))
           )}
         </View>
       </ScrollView>
@@ -4383,6 +4528,7 @@ function NewWarehouseOrderScreen({
   const [products, setProducts] = useState<ProductEntry[]>([
     { id: Date.now().toString(), name: '', quantity: '' }
   ]);
+  const [selectedHotel, setSelectedHotel] = useState<string>('');
   const [saving, setSaving] = useState(false);
 
   const handleAddProduct = () => {
@@ -4438,8 +4584,9 @@ function NewWarehouseOrderScreen({
       const newOrder: InventoryOrder = {
         id: '', // Backend will generate
         orderDate: orderDate,
-        status: 'ממתין לאישור',
+        status: 'מחכה להשלמת תשלום',
         orderType: 'הזמנה כללית',
+        unitNumber: selectedHotel || undefined,
         items: orderItems,
       };
 
@@ -4468,6 +4615,34 @@ function NewWarehouseOrderScreen({
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.hotelSelectorContainer}>
+          <Text style={styles.hotelSelectorLabel}>בחר מלון/יחידה:</Text>
+          <Pressable
+            style={styles.hotelSelectorButton}
+            onPress={() => {
+              Alert.alert(
+                'בחר מלון/יחידה',
+                '',
+                [
+                  { text: 'ביטול', style: 'cancel' },
+                  ...UNIT_CATEGORIES.flatMap(category => 
+                    category.units.map(unit => ({
+                      text: unit,
+                      onPress: () => setSelectedHotel(unit),
+                    }))
+                  ),
+                  { text: 'ללא מלון', onPress: () => setSelectedHotel('') },
+                ],
+                { cancelable: true }
+              );
+            }}
+          >
+            <Text style={styles.hotelSelectorButtonText}>
+              {selectedHotel || '-- בחר מלון/יחידה --'}
+            </Text>
+          </Pressable>
+        </View>
+
         <View style={styles.simpleOrderList}>
           {products.map((product, index) => (
             <View key={product.id} style={styles.simpleOrderItem}>
@@ -5734,24 +5909,12 @@ function ReportsScreen({
                   <Text style={styles.reportUnitKpiValue}>{inventoryOrders.length}</Text>
                 </View>
                 <View style={styles.reportUnitKpiItem}>
-                  <Text style={styles.reportUnitKpiLabel}>ממתין לאישור</Text>
-                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['ממתין לאישור'] || 0}</Text>
+                  <Text style={styles.reportUnitKpiLabel}>שולם מלא</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['שולם מלא'] || 0}</Text>
                 </View>
                 <View style={styles.reportUnitKpiItem}>
-                  <Text style={styles.reportUnitKpiLabel}>מאושר</Text>
-                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['מאושר'] || 0}</Text>
-                </View>
-                <View style={styles.reportUnitKpiItem}>
-                  <Text style={styles.reportUnitKpiLabel}>בהזמנה</Text>
-                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['בהזמנה'] || 0}</Text>
-                </View>
-                <View style={styles.reportUnitKpiItem}>
-                  <Text style={styles.reportUnitKpiLabel}>התקבל</Text>
-                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['התקבל'] || 0}</Text>
-                </View>
-                <View style={styles.reportUnitKpiItem}>
-                  <Text style={styles.reportUnitKpiLabel}>בוטל</Text>
-                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['בוטל'] || 0}</Text>
+                  <Text style={styles.reportUnitKpiLabel}>מחכה להשלמת תשלום</Text>
+                  <Text style={styles.reportUnitKpiValue}>{inventoryOrdersByStatus['מחכה להשלמת תשלום'] || 0}</Text>
                 </View>
               </View>
 
@@ -8642,12 +8805,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 10,
-    backgroundColor: '#e2e8f0',
+    backgroundColor: '#ef4444',
     borderWidth: 1,
-    borderColor: '#cbd5e1',
+    borderColor: '#dc2626',
   },
   backButtonText: {
-    color: '#475569',
+    color: '#ffffff',
     fontWeight: '700',
     fontSize: 14,
   },
@@ -8685,8 +8848,64 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontWeight: '600',
   },
-  progressSection: {
+  welcomeSection: {
     marginTop: 24,
+  },
+  welcomeCard: {
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    shadowColor: '#667eea',
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 20,
+    backgroundColor: '#667eea',
+  },
+  welcomeAvatar: {
+    flexShrink: 0,
+  },
+  welcomeAvatarPlaceholder: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderWidth: 3,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  welcomeAvatarImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 3,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  welcomeAvatarIcon: {
+    fontSize: 40,
+  },
+  welcomeContent: {
+    flex: 1,
+    gap: 6,
+  },
+  welcomeTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#ffffff',
+    textAlign: 'right',
+    textShadowColor: 'rgba(0, 0, 0, 0.1)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  welcomeSubtitle: {
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.9)',
+    textAlign: 'right',
+    fontWeight: '500',
   },
   sectionTitle: {
     fontSize: 18,
@@ -8694,6 +8913,9 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     textAlign: 'right',
     marginBottom: 12,
+  },
+  progressSection: {
+    marginTop: 24,
   },
   progressCard: {
     backgroundColor: '#fff',
@@ -9006,6 +9228,82 @@ const styles = StyleSheet.create({
   selectItemTextActive: {
     fontWeight: '700',
     color: '#0f172a',
+  },
+  pickerContainer: {
+    flexDirection: 'row-reverse',
+    gap: 10,
+    marginTop: 6,
+  },
+  pickerButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#fff',
+    alignItems: 'center',
+  },
+  pickerButtonSelected: {
+    borderColor: '#2563eb',
+    backgroundColor: '#eff6ff',
+  },
+  pickerButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  pickerButtonTextSelected: {
+    color: '#2563eb',
+    fontWeight: '700',
+  },
+  imageUploadButton: {
+    width: '100%',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  imageUploadButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#475569',
+  },
+  imagePreviewContainer: {
+    position: 'relative',
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  imagePreview: {
+    width: 200,
+    height: 200,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  removeImageButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   error: {
     color: '#b91c1c',
@@ -11575,6 +11873,55 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '700',
+  },
+  // Hotel selector styles
+  hotelSelectorContainer: {
+    marginBottom: 20,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  hotelSelectorLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'right',
+    marginBottom: 10,
+  },
+  hotelSelectorButton: {
+    width: '100%',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#fff',
+  },
+  hotelSelectorButtonText: {
+    fontSize: 15,
+    color: '#0f172a',
+    textAlign: 'right',
+  },
+  hotelGroupTitle: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#f0f9ff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+    marginBottom: 12,
+  },
+  hotelGroupTitleText: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0f172a',
+    textAlign: 'right',
   },
   // New Inventory Order Styles
   orderSearchSection: {
