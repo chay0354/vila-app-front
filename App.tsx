@@ -46,7 +46,7 @@ try {
 
 import { API_BASE_URL } from './src/apiConfig';
 
-type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'exitInspections' | 'cleaningInspections' | 'warehouse' | 'warehouseMenu' | 'warehouseOrders' | 'warehouseInventory' | 'warehouseInventoryDetail' | 'newWarehouse' | 'newWarehouseItem' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask' | 'reports' | 'chat' | 'attendance' | 'invoices' | 'cleaningSchedule';
+type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'exitInspections' | 'cleaningInspections' | 'monthlyInspections' | 'warehouse' | 'warehouseMenu' | 'warehouseOrders' | 'warehouseInventory' | 'warehouseInventoryDetail' | 'newWarehouse' | 'newWarehouseItem' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask' | 'reports' | 'chat' | 'attendance' | 'invoices' | 'cleaningSchedule';
 type OrderStatus = 'חדש' | 'באישור' | 'שולם חלקית' | 'שולם' | 'בוטל';
 type InspectionStatus =
   | 'זמן הביקורות טרם הגיע'
@@ -375,6 +375,7 @@ function AppContent() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [inspectionMissions, setInspectionMissions] = useState<InspectionMission[]>([]);
   const [cleaningInspectionMissions, setCleaningInspectionMissions] = useState<InspectionMission[]>([]);
+  const [monthlyInspectionMissions, setMonthlyInspectionMissions] = useState<InspectionMission[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>(initialInventoryItems);
   const [inventoryOrders, setInventoryOrders] = useState<InventoryOrder[]>(initialInventoryOrders);
   const [warehouses, setWarehouses] = useState<Array<{id: string; name: string; location?: string}>>([]);
@@ -538,6 +539,67 @@ function AppContent() {
     // כיבוי ונעילה
     { id: '23', name: 'כיבוי אורות פנים וחוץ הוילה', completed: false },
     { id: '24', name: 'לנעול דלת ראשית', completed: false },
+  ], []);
+
+  const defaultCleaningInspectionTasks: InspectionTask[] = useMemo(() => [
+    // מטבח (Kitchen)
+    { id: '1', name: 'מכונת קפה, לנקות ולהחליף פילטר קפה', completed: false },
+    { id: '2', name: 'קפה תה סוכר וכו׳', completed: false },
+    { id: '3', name: 'להעביר סמרטוט במתקן מים', completed: false },
+    { id: '4', name: 'מקרר – בפנים ובחוץ', completed: false },
+    { id: '5', name: 'תנור – בפנים ובחוץ', completed: false },
+    { id: '6', name: 'כיריים וגריל', completed: false },
+    { id: '7', name: 'מיקרו', completed: false },
+    { id: '8', name: 'כיור', completed: false },
+    { id: '9', name: 'כלים – לשטוף ליבש ולהחזיר לארון', completed: false },
+    { id: '10', name: 'לבדוק שכל הכלים נקיים', completed: false },
+    { id: '11', name: 'לבדוק שיש לפחות 20 כוסות אוכל מכל דבר', completed: false },
+    { id: '12', name: 'ארונות מטבח – לפתוח ולראות שאין דברים להוציא דברים לא קשורים', completed: false },
+    { id: '13', name: 'להעביר סמרטוט על הדלתות מטבח בחוץ', completed: false },
+    { id: '14', name: 'להעביר סמרטוט על הפח ולראות שנקי', completed: false },
+    { id: '15', name: 'פלטת שבת ומיחם מים חמים – לראות שאין אבן', completed: false },
+    { id: '16', name: 'סכו״ם, כלים, סמרטוט, סקוֹץ׳ חדשים לאורחים', completed: false },
+    { id: '17', name: 'סבון', completed: false },
+    // סלון (Living Room)
+    { id: '18', name: 'סלון שטיפה יסודית גם מתחת לספות ולשולחן, להזיז כורסאות ולבדוק שאין פירורים של אוכל', completed: false },
+    { id: '19', name: 'שולחן אוכל וספסלים (לנקות בשפריצר ולהעביר סמרטוט)', completed: false },
+    { id: '20', name: 'סלון – לנגב אבק ולהעביר סמרטוט גם על הספה. כיריות לנקות לסדר יפה', completed: false },
+    { id: '21', name: 'שולחן אוכל וספסלים – להעביר סמרטוט נקי עם תריס', completed: false },
+    { id: '22', name: 'חלונות ותריסים – עם ספריי חלונות וסמרטוט נקי. שלא יהיו סימנים. מסילות לנקות', completed: false },
+    // מסדרון (Hallway)
+    { id: '23', name: 'מסדרון – לנגב בחוץ שטיחים. לנקות מסילות בחלונות. לנקות חלונות', completed: false },
+    // חצר (Yard)
+    { id: '24', name: 'טיפול ברזים וניקוי', completed: false },
+    { id: '25', name: 'להשקות עציצים בכל המתחם', completed: false },
+    { id: '26', name: 'פינת מנגל – לרוקן פחים ולנקות רשת, וכל אזור המנגל', completed: false },
+    { id: '27', name: 'לנקות דשא ולסדר פינות ישיבה', completed: false },
+    { id: '28', name: 'שולחן חוץ – להעביר סמרטוט עם חומר. כיסאות נקיים', completed: false },
+    { id: '29', name: 'שטיפה לרצפה בחוץ', completed: false },
+    { id: '30', name: 'לרוקן את הפחים, לשים שקית חדשה', completed: false },
+    { id: '31', name: 'להעביר סמרטוט על הפחים ולשים שקיות', completed: false },
+  ], []);
+
+  const defaultMonthlyInspectionTasks: InspectionTask[] = useMemo(() => [
+    { id: '1', name: 'בדיקת תקינות מערכות חשמל', completed: false },
+    { id: '2', name: 'בדיקת תקינות מערכות מים', completed: false },
+    { id: '3', name: 'בדיקת תקינות מערכות גז', completed: false },
+    { id: '4', name: 'בדיקת תקינות מזגנים', completed: false },
+    { id: '5', name: 'בדיקת תקינות דודי שמש', completed: false },
+    { id: '6', name: 'בדיקת תקינות מערכות אבטחה', completed: false },
+    { id: '7', name: 'בדיקת תקינות מערכות תאורה', completed: false },
+    { id: '8', name: 'בדיקת תקינות דלתות וחלונות', completed: false },
+    { id: '9', name: 'בדיקת תקינות ריהוט וציוד', completed: false },
+    { id: '10', name: 'בדיקת תקינות מערכות ניקוז', completed: false },
+    { id: '11', name: 'בדיקת תקינות מערכות אוורור', completed: false },
+    { id: '12', name: 'בדיקת תקינות מערכות כיבוי אש', completed: false },
+    { id: '13', name: 'בדיקת תקינות מערכות אינטרנט', completed: false },
+    { id: '14', name: 'בדיקת תקינות מערכות טלוויזיה', completed: false },
+    { id: '15', name: 'בדיקת תקינות מערכות מיזוג', completed: false },
+    { id: '16', name: 'בדיקת תקינות מערכות מים חמים', completed: false },
+    { id: '17', name: 'בדיקת תקינות מערכות תאורה חוץ', completed: false },
+    { id: '18', name: 'בדיקת תקינות מערכות השקיה', completed: false },
+    { id: '19', name: 'בדיקת תקינות מערכות בריכה', completed: false },
+    { id: '20', name: 'בדיקת תקינות מערכות גקוזי', completed: false },
   ], []);
 
   // Load inspections from backend
@@ -810,6 +872,158 @@ function AppContent() {
     }
   };
 
+  const loadCleaningInspections = async () => {
+    // First, sync cleaning inspections with orders to ensure all departure dates have cleaning inspections
+    await syncCleaningInspectionsWithOrders();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/cleaning-inspections`);
+      if (res.ok) {
+        const data = await res.json();
+        const loadedMissions: InspectionMission[] = (data || []).map((insp: any) => {
+          const backendTasks = (insp.tasks || []).map((t: any) => ({
+            id: String(t.id),
+            name: String(t.name || ''),
+            completed: Boolean(t.completed),
+          }));
+          
+          // Merge backend tasks with default cleaning inspection tasks
+          let tasks: InspectionTask[] = [];
+          if (backendTasks.length === 0) {
+            tasks = defaultCleaningInspectionTasks.map(t => ({ ...t }));
+          } else {
+            const tasksMapById = new Map(backendTasks.map(t => [String(t.id), t]));
+            const tasksMapByName = new Map(backendTasks.map(t => [String(t.name).trim().toLowerCase(), t]));
+            
+            tasks = defaultCleaningInspectionTasks.map(defaultTask => {
+              let backendTask = tasksMapById.get(String(defaultTask.id));
+              if (!backendTask) {
+                const defaultTaskName = String(defaultTask.name).trim().toLowerCase();
+                backendTask = tasksMapByName.get(defaultTaskName);
+              }
+              
+              if (backendTask) {
+                return { 
+                  id: String(defaultTask.id),
+                  name: String(backendTask.name || defaultTask.name),
+                  completed: Boolean(backendTask.completed)
+                };
+              } else {
+                return { ...defaultTask };
+              }
+            });
+          }
+          
+          return {
+            id: insp.id,
+            orderId: insp.order_id || insp.orderId || '',
+            unitNumber: insp.unit_number || insp.unitNumber || '',
+            guestName: insp.guest_name || insp.guestName || '',
+            departureDate: insp.departure_date || insp.departureDate || '',
+            status: (insp.status || 'זמן הביקורות טרם הגיע') as InspectionStatus,
+            tasks,
+          };
+        });
+        
+        // Group by departure date - one mission per departure date
+        const missionsByDate = new Map<string, InspectionMission>();
+        loadedMissions.forEach(m => {
+          const date = m.departureDate;
+          const existing = missionsByDate.get(date);
+          if (!existing || (existing.tasks.filter(t => t.completed).length < m.tasks.filter(t => t.completed).length)) {
+            missionsByDate.set(date, m);
+          }
+        });
+        setCleaningInspectionMissions(Array.from(missionsByDate.values()));
+      }
+    } catch (err) {
+      console.warn('Error loading cleaning inspections from backend:', err);
+    }
+  };
+
+  const syncMonthlyInspections = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/monthly-inspections/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        console.log('Synced monthly inspections via backend');
+      } else {
+        console.error('Monthly inspections sync failed with status:', res.status);
+      }
+    } catch (err) {
+      console.error('Error syncing monthly inspections:', err);
+    }
+  };
+
+  const loadMonthlyInspections = async () => {
+    await syncMonthlyInspections();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/monthly-inspections`);
+      console.log('Monthly inspections response status:', res.status);
+      if (res.ok) {
+        const data = await res.json();
+        console.log('Backend returned', data?.length || 0, 'monthly inspections');
+        if (data && data.length > 0) {
+          console.log('Sample inspection:', JSON.stringify(data[0], null, 2));
+        } else {
+          console.warn('WARNING: Backend returned empty array for monthly inspections');
+        }
+        const loadedMissions: InspectionMission[] = (data || []).map((insp: any) => {
+          const backendTasks = (insp.tasks || []).map((t: any) => ({
+            id: String(t.id),
+            name: String(t.name || ''),
+            completed: Boolean(t.completed),
+          }));
+          
+          // Merge backend tasks with default monthly inspection tasks
+          let tasks: InspectionTask[] = [];
+          if (backendTasks.length === 0) {
+            tasks = defaultMonthlyInspectionTasks.map(t => ({ ...t }));
+          } else {
+            const tasksMapById = new Map(backendTasks.map((t: any) => [String(t.id), t]));
+            const tasksMapByName = new Map(backendTasks.map((t: any) => [String(t.name).trim().toLowerCase(), t]));
+            
+            tasks = defaultMonthlyInspectionTasks.map(defaultTask => {
+              let backendTask = tasksMapById.get(String(defaultTask.id));
+              if (!backendTask) {
+                const defaultTaskName = String(defaultTask.name).trim().toLowerCase();
+                backendTask = tasksMapByName.get(defaultTaskName);
+              }
+              
+              if (backendTask) {
+                return { 
+                  id: String(defaultTask.id),
+                  name: String(backendTask.name || defaultTask.name),
+                  completed: Boolean(backendTask.completed)
+                };
+              } else {
+                return { ...defaultTask };
+              }
+            });
+          }
+          
+          // For monthly inspections, use inspectionMonth as departureDate for compatibility
+          const inspectionMonth = insp.inspectionMonth || insp.inspection_month || '';
+          
+          return {
+            id: insp.id,
+            orderId: '', // Monthly inspections don't have order IDs
+            unitNumber: insp.unitNumber || insp.unit_number || '',
+            guestName: '', // Monthly inspections don't have guest names
+            departureDate: inspectionMonth, // Use month as date for compatibility
+            status: (insp.status || 'זמן הביקורות טרם הגיע') as InspectionStatus,
+            tasks,
+          };
+        });
+        
+        setMonthlyInspectionMissions(loadedMissions);
+      }
+    } catch (err) {
+      console.warn('Error loading monthly inspections from backend:', err);
+    }
+  };
+
   // Sync and reload inspections when screen opens
   useEffect(() => {
     if (screen === 'exitInspections') {
@@ -821,7 +1035,13 @@ function AppContent() {
     } else if (screen === 'cleaningInspections') {
       const syncAndLoad = async () => {
         await syncCleaningInspectionsWithOrders();
-        // TODO: Add loadCleaningInspections() when cleaning inspections screen is implemented
+        await loadCleaningInspections();
+      };
+      syncAndLoad();
+    } else if (screen === 'monthlyInspections') {
+      const syncAndLoad = async () => {
+        await syncMonthlyInspections();
+        await loadMonthlyInspections();
       };
       syncAndLoad();
     }
@@ -1889,37 +2109,56 @@ function AppContent() {
                   style={[styles.quickActionBtn, { backgroundColor: '#3b82f6' }]}
                   onPress={() => setScreen('orders')}
                 >
-                  <Text style={styles.quickActionIcon}>📑</Text>
-                  <Text style={styles.quickActionText}>הזמנות</Text>
+                  <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={styles.quickActionIcon}>📑</Text>
+                    <Text style={styles.quickActionText}>הזמנות</Text>
+                  </View>
                 </Pressable>
               )}
               <Pressable
                 style={[styles.quickActionBtn, { backgroundColor: '#f97316' }]}
                 onPress={() => setScreen('exitInspections')}
               >
-                <Text style={styles.quickActionIcon}>🧹</Text>
-                <Text style={styles.quickActionText}>ביקורת יציאה</Text>
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={styles.quickActionIcon}>🧹</Text>
+                  <Text style={styles.quickActionText}>ביקורת יציאה</Text>
+                </View>
               </Pressable>
               <Pressable
-                style={[styles.quickActionBtn, { backgroundColor: '#84cc16' }]}
+                style={[styles.quickActionBtn, { backgroundColor: '#f7fee7', borderWidth: 2, borderColor: '#84cc16' }]}
                 onPress={() => setScreen('cleaningInspections')}
               >
-                <Text style={styles.quickActionIcon}>✨</Text>
-                <Text style={styles.quickActionText}>ביקורת ניקיון</Text>
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={styles.quickActionIcon}>✨</Text>
+                  <Text style={[styles.quickActionText, { color: '#0f172a' }]}>ביקורת ניקיון</Text>
+                </View>
+              </Pressable>
+              <Pressable
+                style={[styles.quickActionBtn, { backgroundColor: '#fef3c7', borderWidth: 2, borderColor: '#f59e0b' }]}
+                onPress={() => setScreen('monthlyInspections')}
+              >
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={styles.quickActionIcon}>📅</Text>
+                  <Text style={[styles.quickActionText, { color: '#0f172a' }]}>ביקורות חודשיות</Text>
+                </View>
               </Pressable>
               <Pressable
                 style={[styles.quickActionBtn, { backgroundColor: '#a78bfa' }]}
                 onPress={() => setScreen('warehouse')}
               >
-                <Text style={styles.quickActionIcon}>📦</Text>
-                <Text style={styles.quickActionText}>מחסן</Text>
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={styles.quickActionIcon}>📦</Text>
+                  <Text style={styles.quickActionText}>מחסן</Text>
+                </View>
               </Pressable>
               <Pressable
                 style={[styles.quickActionBtn, { backgroundColor: '#22c55e' }]}
                 onPress={() => setScreen('maintenance')}
               >
-                <Text style={styles.quickActionIcon}>🛠️</Text>
-                <Text style={styles.quickActionText}>תחזוקה</Text>
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={styles.quickActionIcon}>🛠️</Text>
+                  <Text style={styles.quickActionText}>תחזוקה</Text>
+                </View>
               </Pressable>
               {userRole === 'מנהל' && (
                 <>
@@ -1927,150 +2166,54 @@ function AppContent() {
                     style={[styles.quickActionBtn, { backgroundColor: '#6366f1' }]}
                     onPress={() => setScreen('reports')}
                   >
-                    <Text style={styles.quickActionIcon}>📊</Text>
-                    <Text style={styles.quickActionText}>דוחות</Text>
+                    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={styles.quickActionIcon}>📊</Text>
+                      <Text style={styles.quickActionText}>דוחות</Text>
+                    </View>
                   </Pressable>
                   <Pressable
                     style={[styles.quickActionBtn, { backgroundColor: '#0ea5e9' }]}
                     onPress={() => setScreen('invoices')}
                   >
-                    <Text style={styles.quickActionIcon}>🧾</Text>
-                    <Text style={styles.quickActionText}>חשבוניות</Text>
+                    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={styles.quickActionIcon}>🧾</Text>
+                      <Text style={styles.quickActionText}>חשבוניות</Text>
+                    </View>
                   </Pressable>
                 </>
               )}
               <Pressable
-                style={[styles.quickActionBtn, { backgroundColor: '#eab308' }]}
-                onPress={() => setScreen('chat')}
-              >
-                <Text style={styles.quickActionIcon}>💬</Text>
-                <Text style={styles.quickActionText}>צ׳אט פנימי</Text>
-              </Pressable>
-              <Pressable
                 style={[styles.quickActionBtn, { backgroundColor: '#ec4899' }]}
                 onPress={() => setScreen('attendance')}
               >
-                <Text style={styles.quickActionIcon}>⏱️</Text>
-                <Text style={styles.quickActionText}>שעון נוכחות</Text>
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={styles.quickActionIcon}>⏱️</Text>
+                  <Text style={styles.quickActionText}>שעון נוכחות</Text>
+                </View>
               </Pressable>
               <Pressable
                 style={[styles.quickActionBtn, { backgroundColor: '#10b981' }]}
                 onPress={() => setScreen('cleaningSchedule')}
               >
-                <Text style={styles.quickActionIcon}>🧹</Text>
-                <Text style={styles.quickActionText}>סידורי ניקיון</Text>
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={styles.quickActionIcon}>🧹</Text>
+                  <Text style={styles.quickActionText}>סידורי ניקיון</Text>
+                </View>
               </Pressable>
             </View>
           </View>
 
-          <View style={styles.optionGrid}>
-            {userRole === 'מנהל' && (
-              <OptionCard
-                title="הזמנות"
-                icon="📑"
-                accent="#38bdf8"
-                details={[
-                  'רשימת הזמנות מלאה, פרטי אורח ומספר יחידה',
-                  'עדכון סכום ששולם, אופן תשלום וסטטוס',
-                  'סיכום מלא והוצאות כולל יצוא לאקסל',
-                ]}
-                cta="פתח הזמנות"
-                onPress={() => setScreen('orders')}
-              />
-            )}
-            <OptionCard
-              title="ביקורת יציאה"
-              icon="🧹"
-              accent="#f97316"
-              details={[
-                'משימות ניקיון לאחר עזיבה',
-                'סטטוסים: צריך ביקורת / בביצוע / הושלם',
-              ]}
-              cta="פתח ביקורות"
-              onPress={() => setScreen('exitInspections')}
-            />
-            <OptionCard
-              title="ביקורת ניקיון"
-              icon="✨"
-              accent="#84cc16"
-              details={[
-                'משימות ניקיון מפורטות: מטבח, סלון, מסדרון, חצר',
-                'סטטוסים: צריך ביקורת / בביצוע / הושלם',
-              ]}
-              cta="פתח ביקורות ניקיון"
-              onPress={() => setScreen('cleaningInspections')}
-            />
-            <OptionCard
-              title="מחסן"
-              icon="📦"
-              accent="#a78bfa"
-              details={[
-                'רשימת פריטי מלאי: מצעים, מוצרי ניקיון, ציוד מתכלה',
-                'יצירת הזמנות פנימיות וצפייה בסטטוס',
-                'הזמנות עתידיות ובחירת מתחם',
-              ]}
-              cta="פתח מחסן"
-              onPress={() => setScreen('warehouse')}
-            />
-            <OptionCard
-              title="תחזוקה"
-              icon="🛠️"
-              accent="#22c55e"
-              details={[
-                'רשימת יחידות נופש והמצב התחזוקתי',
-                'משימות תחזוקה עם תמונות וסטטוס',
-                'יצירת משימות חדשות ועדכון קיימות',
-              ]}
-              cta="פתח תחזוקה"
-              onPress={() => setScreen('maintenance')}
-            />
-            {userRole === 'מנהל' && (
-              <>
-                <OptionCard
-                  title="דוחות"
-                  icon="דוח"
-                  accent="#6366f1"
-                  details={[
-                    'דוח הזמנות, ביקורות, מחסן, תחזוקה ונוכחות',
-                    'הכנסות/שולם/הוצאות מהשרת',
-                  ]}
-                  cta="פתח דוחות"
-                  onPress={() => setScreen('reports')}
-                />
-                <OptionCard
-                  title="חשבוניות"
-                  icon="🧾"
-                  accent="#0ea5e9"
-                  details={['העלאת PDF/תמונה', 'OCR לזיהוי ספק, תאריך וסכום']}
-                  cta="פתח חשבוניות"
-                  onPress={() => setScreen('invoices')}
-                />
-              </>
-            )}
-            <OptionCard
-              title="צ׳אט פנימי"
-              icon="💬"
-              accent="#eab308"
-              details={['תקשורת צוות והתראות']}
-              cta="פתח צ'אט"
+          {/* Chat button at bottom - full width */}
+          <View style={styles.chatSection}>
+            <Pressable
+              style={[styles.chatButton, { backgroundColor: '#eab308' }]}
               onPress={() => setScreen('chat')}
-            />
-            <OptionCard
-              title="שעון נוכחות"
-              icon="⏱️"
-              accent="#ec4899"
-              details={['התחלה וסיום עבודה', 'מעקב שעות עבודה']}
-              cta="פתח שעון נוכחות"
-              onPress={() => setScreen('attendance')}
-            />
-            <OptionCard
-              title="סידורי ניקיון"
-              icon="🧹"
-              accent="#10b981"
-              details={['לוח זמנים לניקיון', 'הוספת מנקים ושעות עבודה']}
-              cta="פתח סידורי ניקיון"
-              onPress={() => setScreen('cleaningSchedule')}
-            />
+            >
+              <View style={{ flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+                <Text style={styles.chatButtonIcon}>💬</Text>
+                <Text style={styles.quickActionText}>צ׳אט פנימי</Text>
+              </View>
+            </Pressable>
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -2169,6 +2312,97 @@ function AppContent() {
             });
           } catch (err) {
             console.error('Error saving inspection to backend:', err);
+          }
+        }}
+        onBack={() => setScreen('hub')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
+  if (screen === 'cleaningInspections') {
+    const cleaningMissionsAll = [...cleaningInspectionMissions].sort((a, b) =>
+      (a.departureDate || '').localeCompare(b.departureDate || ''),
+    );
+    return (
+      <CleaningInspectionsScreen
+        missions={cleaningMissionsAll}
+        defaultInspectionTasks={defaultCleaningInspectionTasks}
+        loadInspections={loadCleaningInspections}
+        onUpdateMission={async (id, updates) => {
+          const mission = cleaningInspectionMissions.find(m => m.id === id);
+          if (!mission) return;
+
+          // Update local state immediately for responsive UI
+          setCleaningInspectionMissions(prev =>
+            prev.map(m => (m.id === id ? { ...m, ...updates } : m)),
+          );
+
+          // Save to backend
+          try {
+            const updatedMission = { ...mission, ...updates };
+            await fetch(`${API_BASE_URL}/api/cleaning-inspections`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: updatedMission.id,
+                orderId: updatedMission.orderId,
+                unitNumber: updatedMission.unitNumber,
+                guestName: updatedMission.guestName,
+                departureDate: updatedMission.departureDate,
+                status: updatedMission.status,
+                tasks: updatedMission.tasks,
+              }),
+            });
+          } catch (err) {
+            console.error('Error saving cleaning inspection to backend:', err);
+          }
+        }}
+        onBack={() => setScreen('hub')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
+  if (screen === 'monthlyInspections') {
+    const monthlyMissionsAll = [...monthlyInspectionMissions].sort((a, b) => {
+      // Sort by month first, then by unit number
+      const monthCompare = (a.departureDate || '').localeCompare(b.departureDate || '');
+      if (monthCompare !== 0) return monthCompare;
+      return (a.unitNumber || '').localeCompare(b.unitNumber || '');
+    });
+    return (
+      <MonthlyInspectionsScreen
+        missions={monthlyMissionsAll}
+        defaultInspectionTasks={defaultMonthlyInspectionTasks}
+        loadInspections={loadMonthlyInspections}
+        onUpdateMission={async (id, updates) => {
+          const mission = monthlyInspectionMissions.find(m => m.id === id);
+          if (!mission) return;
+
+          // Update local state immediately for responsive UI
+          setMonthlyInspectionMissions(prev =>
+            prev.map(m => (m.id === id ? { ...m, ...updates } : m)),
+          );
+
+          // Save to backend
+          try {
+            const updatedMission = { ...mission, ...updates };
+            await fetch(`${API_BASE_URL}/api/monthly-inspections`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: updatedMission.id,
+                unitNumber: updatedMission.unitNumber,
+                inspectionMonth: updatedMission.departureDate, // Use departureDate as inspectionMonth
+                status: updatedMission.status,
+                tasks: updatedMission.tasks,
+              }),
+            });
+          } catch (err) {
+            console.error('Error saving monthly inspection to backend:', err);
           }
         }}
         onBack={() => setScreen('hub')}
@@ -3580,6 +3814,463 @@ function ExitInspectionsScreen({
   );
 }
 
+type CleaningInspectionsProps = {
+  missions: InspectionMission[];
+  defaultInspectionTasks: InspectionTask[];
+  onUpdateMission: (id: string, updates: Partial<InspectionMission>) => void;
+  onBack: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+  loadInspections: () => Promise<void>;
+};
+
+function CleaningInspectionsScreen({
+  missions,
+  defaultInspectionTasks,
+  onUpdateMission,
+  onBack,
+  safeAreaInsets,
+  statusBar,
+  loadInspections,
+}: CleaningInspectionsProps) {
+
+  const toggleTask = async (missionId: string, taskId: string) => {
+    const mission = missions.find(m => m.id === missionId);
+    if (!mission) return;
+    
+    const task = mission.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    
+    const updatedTasks = mission.tasks.map(t =>
+      t.id === taskId ? { ...t, completed: !t.completed } : t,
+    );
+
+    const updatedStatus = computeInspectionStatus({ departureDate: mission.departureDate, tasks: updatedTasks });
+
+    // Update local state immediately (don't save to backend yet)
+    onUpdateMission(missionId, {
+      tasks: updatedTasks,
+      status: updatedStatus,
+    });
+  };
+
+  const handleSave = async (missionId: string) => {
+    // Get the latest mission from current state
+    const mission = missions.find(m => m.id === missionId);
+    if (!mission) {
+      console.error('Mission not found:', missionId);
+      Alert.alert('שגיאה', 'לא נמצאה משימת ביקורת');
+      return;
+    }
+
+    const completedCount = mission.tasks.filter(t => t.completed).length;
+    console.log('Saving cleaning inspection mission:', missionId, 'with tasks:', mission.tasks.length, 'completed:', completedCount);
+    
+    // Ensure all tasks have the correct format with boolean completed status
+    const defaultTasksMap = new Map(defaultInspectionTasks.map(dt => [dt.name.trim().toLowerCase(), dt]));
+    
+    const tasksToSave = mission.tasks.map(t => {
+      const taskName = String(t.name).trim().toLowerCase();
+      const defaultTask = defaultTasksMap.get(taskName);
+      const correctId = defaultTask ? String(defaultTask.id) : String(t.id);
+      
+      return {
+        id: correctId,
+        name: String(t.name),
+        completed: Boolean(t.completed),
+      };
+    });
+    
+    // Save the entire mission with all tasks to backend
+    try {
+      const payload = {
+        id: mission.id,
+        orderId: mission.orderId,
+        unitNumber: mission.unitNumber,
+        guestName: mission.guestName,
+        departureDate: mission.departureDate,
+        status: mission.status,
+        tasks: tasksToSave,
+      };
+      
+      const response = await fetch(`${API_BASE_URL}/api/cleaning-inspections`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.error('Error saving cleaning inspection:', response.status, errorText);
+        try {
+          const errorData = JSON.parse(errorText);
+          Alert.alert('שגיאה', `שגיאה בשמירה: ${errorData.detail || errorText}`);
+        } catch {
+          Alert.alert('שגיאה', `שגיאה בשמירה: ${response.status} ${errorText}`);
+        }
+        return;
+      }
+      
+      const result = await response.json().catch(() => null);
+      console.log('Cleaning inspection saved successfully:', missionId);
+      
+      if (result && result.tasks) {
+        const savedCompleted = result.completedTasksCount || result.tasks.filter((t: any) => t.completed).length;
+        const savedCount = result.savedTasksCount || result.tasks.length;
+        const totalCount = result.totalTasksCount || mission.tasks.length;
+        
+        // Reload cleaning inspections from backend
+        await loadInspections();
+        
+        if (savedCount === totalCount && savedCompleted === completedCount) {
+          Alert.alert('הצלחה', `נשמר בהצלחה! ${completedCount}/${totalCount} משימות הושלמו`);
+        } else if (savedCount < totalCount) {
+          Alert.alert('אזהרה', `נשמר חלקית: ${savedCount}/${totalCount} משימות נשמרו. ${savedCompleted} הושלמו.`);
+        } else {
+          Alert.alert('אזהרה', `נשמר, אך יש לבדוק: ${savedCompleted}/${totalCount} משימות הושלמו (צפוי: ${completedCount})`);
+        }
+      } else {
+        Alert.alert('אזהרה', 'נשמר, אך לא ניתן לאמת את השמירה - תגובת השרת לא כוללת משימות');
+      }
+    } catch (err: any) {
+      console.error('Error saving cleaning inspection to backend:', err);
+      Alert.alert('שגיאה', `שגיאה בשמירה: ${err.message || 'נסה שוב'}`);
+    }
+  };
+
+  return (
+    <SafeAreaView
+      style={[styles.container, { paddingTop: safeAreaInsets.top }]}
+    >
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable onPress={onBack} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+      </View>
+      <ScrollView contentContainerStyle={styles.scroll}>
+        {/* Hotel name - show from first mission */}
+        {missions.length > 0 && missions[0].unitNumber && (
+          <View style={styles.hotelNameContainer}>
+            <Text style={styles.hotelNameText}>
+              {missions[0].unitNumber}
+            </Text>
+          </View>
+        )}
+        
+        <View style={styles.inspectionsHeader}>
+          <View>
+            <Text style={styles.title}>ביקורת ניקיון</Text>
+            <Text style={styles.subtitle}>
+              ניהול משימות ניקיון מפורטות: מטבח, סלון, מסדרון, חצר
+            </Text>
+          </View>
+          <View style={styles.statsBadge}>
+            <Text style={styles.statsBadgeText}>
+              {missions.length} משימות
+            </Text>
+          </View>
+        </View>
+
+        {missions.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>אין משימות ביקורת ניקיון כרגע</Text>
+          </View>
+        ) : (
+          <View style={styles.missionsList}>
+            {missions.map(mission => (
+                <InspectionMissionCard
+                  key={mission.id}
+                  mission={mission}
+                  onToggleTask={toggleTask}
+                  onSave={handleSave}
+                  isCleaningInspection={true}
+                />
+            ))}
+          </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+type MonthlyInspectionsProps = {
+  missions: InspectionMission[];
+  defaultInspectionTasks: InspectionTask[];
+  onUpdateMission: (id: string, updates: Partial<InspectionMission>) => void;
+  onBack: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+  loadInspections: () => Promise<void>;
+};
+
+function MonthlyInspectionsScreen({
+  missions,
+  defaultInspectionTasks,
+  onUpdateMission,
+  onBack,
+  safeAreaInsets,
+  statusBar,
+  loadInspections,
+}: MonthlyInspectionsProps) {
+
+  const toggleTask = async (missionId: string, taskId: string) => {
+    const mission = missions.find(m => m.id === missionId);
+    if (!mission) return;
+    
+    const task = mission.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    
+    const updatedTasks = mission.tasks.map(t =>
+      t.id === taskId ? { ...t, completed: !t.completed } : t,
+    );
+
+    const updatedStatus = computeInspectionStatus({ departureDate: mission.departureDate, tasks: updatedTasks });
+
+    // Update local state immediately (don't save to backend yet)
+    onUpdateMission(missionId, {
+      tasks: updatedTasks,
+      status: updatedStatus,
+    });
+  };
+
+  const handleSave = async (missionId: string) => {
+    const mission = missions.find(m => m.id === missionId);
+    if (!mission) {
+      console.error('Mission not found:', missionId);
+      Alert.alert('שגיאה', 'לא נמצאה משימת ביקורת');
+      return;
+    }
+
+    const completedCount = mission.tasks.filter(t => t.completed).length;
+    console.log('Saving monthly inspection mission:', missionId, 'with tasks:', mission.tasks.length, 'completed:', completedCount);
+    
+    const defaultTasksMap = new Map(defaultInspectionTasks.map(dt => [dt.name.trim().toLowerCase(), dt]));
+    
+    const tasksToSave = mission.tasks.map(t => {
+      const taskName = String(t.name).trim().toLowerCase();
+      const defaultTask = defaultTasksMap.get(taskName);
+      const correctId = defaultTask ? String(defaultTask.id) : String(t.id);
+      
+      return {
+        id: correctId,
+        name: String(t.name),
+        completed: Boolean(t.completed),
+      };
+    });
+    
+    try {
+      const payload = {
+        id: mission.id,
+        unitNumber: mission.unitNumber,
+        inspectionMonth: mission.departureDate, // Use departureDate as inspectionMonth
+        status: mission.status,
+        tasks: tasksToSave,
+      };
+      
+      const response = await fetch(`${API_BASE_URL}/api/monthly-inspections`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.error('Error saving monthly inspection:', response.status, errorText);
+        try {
+          const errorData = JSON.parse(errorText);
+          Alert.alert('שגיאה', `שגיאה בשמירה: ${errorData.detail || errorText}`);
+        } catch {
+          Alert.alert('שגיאה', `שגיאה בשמירה: ${response.status} ${errorText}`);
+        }
+        return;
+      }
+      
+      const result = await response.json().catch(() => null);
+      console.log('Monthly inspection saved successfully:', missionId);
+      
+      if (result && result.tasks) {
+        const savedCompleted = result.completedTasksCount || result.tasks.filter((t: any) => t.completed).length;
+        const savedCount = result.savedTasksCount || result.tasks.length;
+        const totalCount = result.totalTasksCount || mission.tasks.length;
+        
+        await loadInspections();
+        
+        if (savedCount === totalCount && savedCompleted === completedCount) {
+          Alert.alert('הצלחה', `נשמר בהצלחה! ${completedCount}/${totalCount} משימות הושלמו`);
+        } else if (savedCount < totalCount) {
+          Alert.alert('אזהרה', `נשמר חלקית: ${savedCount}/${totalCount} משימות נשמרו. ${savedCompleted} הושלמו.`);
+        } else {
+          Alert.alert('אזהרה', `נשמר, אך יש לבדוק: ${savedCompleted}/${totalCount} משימות הושלמו (צפוי: ${completedCount})`);
+        }
+      } else {
+        Alert.alert('אזהרה', 'נשמר, אך לא ניתן לאמת את השמירה - תגובת השרת לא כוללת משימות');
+      }
+    } catch (err: any) {
+      console.error('Error saving monthly inspection to backend:', err);
+      Alert.alert('שגיאה', `שגיאה בשמירה: ${err.message || 'נסה שוב'}`);
+    }
+  };
+
+  // Format month for display (YYYY-MM-DD -> "חודש עברי YYYY")
+  const formatMonth = (monthStr: string) => {
+    if (!monthStr) return '';
+    try {
+      // monthStr is in format "YYYY-MM-01", parse components directly
+      const parts = monthStr.split('-');
+      if (parts.length >= 2) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1; // Convert to 0-11
+        
+        if (isNaN(year) || isNaN(month) || month < 0 || month > 11) {
+          console.warn('Invalid date format:', monthStr);
+          return monthStr;
+        }
+        
+        const hebrewMonths = [
+          'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
+          'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'
+        ];
+        
+        return `${hebrewMonths[month]} ${year}`;
+      } else {
+        // Fallback: try Date parsing
+        const date = new Date(monthStr + 'T00:00:00');
+        if (!isNaN(date.getTime())) {
+          const year = date.getFullYear();
+          const month = date.getMonth();
+          const hebrewMonths = [
+            'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
+            'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'
+          ];
+          return `${hebrewMonths[month]} ${year}`;
+        }
+        return monthStr;
+      }
+    } catch (err) {
+      console.error('Error formatting month:', monthStr, err);
+      return monthStr;
+    }
+  };
+
+  // Get current month and next month
+  const getCurrentAndNextMonth = () => {
+    const today = new Date();
+    const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    
+    const formatMonthKey = (date: Date) => {
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`;
+    };
+    
+    return {
+      currentMonthKey: formatMonthKey(currentMonth),
+      nextMonthKey: formatMonthKey(nextMonth),
+      currentMonthLabel: formatMonth(formatMonthKey(currentMonth)),
+      nextMonthLabel: formatMonth(formatMonthKey(nextMonth)),
+    };
+  };
+
+  const { currentMonthKey, nextMonthKey, currentMonthLabel, nextMonthLabel } = getCurrentAndNextMonth();
+
+  // Group missions by month
+  const currentMonthMissions = missions
+    .filter(m => m.departureDate === currentMonthKey)
+    .sort((a, b) => (a.unitNumber || '').localeCompare(b.unitNumber || ''));
+  
+  const nextMonthMissions = missions
+    .filter(m => m.departureDate === nextMonthKey)
+    .sort((a, b) => (a.unitNumber || '').localeCompare(b.unitNumber || ''));
+
+  return (
+    <SafeAreaView
+      style={[styles.container, { paddingTop: safeAreaInsets.top }]}
+    >
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable onPress={onBack} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+      </View>
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.inspectionsHeader}>
+          <View>
+            <Text style={styles.title}>ביקורות חודשיות</Text>
+            <Text style={styles.subtitle}>
+              ביקורת תקינות חודשית לכל מלון - חודש נוכחי וחודש הבא
+            </Text>
+          </View>
+          <View style={styles.statsBadge}>
+            <Text style={styles.statsBadgeText}>
+              {missions.length} משימות
+            </Text>
+          </View>
+        </View>
+
+        {missions.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>אין משימות ביקורת חודשית כרגע</Text>
+          </View>
+        ) : (
+          <>
+            {/* Current Month Section */}
+            <View style={styles.monthSection}>
+              <Text style={styles.monthSectionTitle}>
+                חודש נוכחי - {currentMonthLabel}
+              </Text>
+              {currentMonthMissions.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyStateText}>אין ביקורות לחודש זה</Text>
+                </View>
+              ) : (
+                <View style={styles.missionsList}>
+                  {currentMonthMissions.map(mission => (
+                    <InspectionMissionCard
+                      key={mission.id}
+                      mission={{
+                        ...mission,
+                        guestName: mission.unitNumber || '', // Show only unit name
+                      }}
+                      onToggleTask={toggleTask}
+                      onSave={handleSave}
+                    />
+                  ))}
+                </View>
+              )}
+            </View>
+
+            {/* Next Month Section */}
+            <View style={styles.monthSection}>
+              <Text style={styles.monthSectionTitle}>
+                חודש הבא - {nextMonthLabel}
+              </Text>
+              {nextMonthMissions.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyStateText}>אין ביקורות לחודש זה</Text>
+                </View>
+              ) : (
+                <View style={styles.missionsList}>
+                  {nextMonthMissions.map(mission => (
+                    <InspectionMissionCard
+                      key={mission.id}
+                      mission={{
+                        ...mission,
+                        guestName: mission.unitNumber || '', // Show only unit name
+                      }}
+                      onToggleTask={toggleTask}
+                      onSave={handleSave}
+                    />
+                  ))}
+                </View>
+              )}
+            </View>
+          </>
+        )}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
 type TaskCategory = {
   name: string;
   tasks: InspectionTask[];
@@ -3649,16 +4340,88 @@ function categorizeTasks(tasks: InspectionTask[]): TaskCategory[] {
   return orderedCategories;
 }
 
+// Categorize cleaning inspection tasks by category (מטבח, סלון, מסדרון, חצר)
+function categorizeCleaningTasks(tasks: InspectionTask[]): TaskCategory[] {
+  const categories: { [key: string]: InspectionTask[] } = {
+    'מטבח': [],
+    'סלון': [],
+    'מסדרון': [],
+    'חצר': [],
+  };
+
+  tasks.forEach(task => {
+    const taskId = parseInt(task.id) || 0;
+    
+    // מטבח (Kitchen) - tasks 1-17
+    if (taskId >= 1 && taskId <= 17) {
+      categories['מטבח'].push(task);
+    }
+    // סלון (Living Room) - tasks 18-22
+    else if (taskId >= 18 && taskId <= 22) {
+      categories['סלון'].push(task);
+    }
+    // מסדרון (Hallway) - task 23
+    else if (taskId === 23) {
+      categories['מסדרון'].push(task);
+    }
+    // חצר (Yard) - tasks 24-31
+    else if (taskId >= 24 && taskId <= 31) {
+      categories['חצר'].push(task);
+    }
+    // Fallback: try to categorize by name
+    else {
+      const taskName = task.name.toLowerCase();
+      if (taskName.includes('מטבח') || taskName.includes('קפה') || taskName.includes('כלים') || 
+          taskName.includes('מקרר') || taskName.includes('תנור') || taskName.includes('כיריים') ||
+          taskName.includes('מיקרו') || taskName.includes('כיור') || taskName.includes('סבון') ||
+          taskName.includes('סכו') || taskName.includes('פילטר') || taskName.includes('פח')) {
+        categories['מטבח'].push(task);
+      } else if (taskName.includes('סלון') || taskName.includes('שולחן אוכל') || 
+                 taskName.includes('ספה') || taskName.includes('כורסאות') || 
+                 taskName.includes('חלונות') || taskName.includes('תריסים')) {
+        categories['סלון'].push(task);
+      } else if (taskName.includes('מסדרון') || taskName.includes('שטיחים')) {
+        categories['מסדרון'].push(task);
+      } else if (taskName.includes('חצר') || taskName.includes('מנגל') || 
+                 taskName.includes('דשא') || taskName.includes('פחים') || 
+                 taskName.includes('ברזים') || taskName.includes('עציצים') ||
+                 taskName.includes('רצפה בחוץ')) {
+        categories['חצר'].push(task);
+      } else {
+        // Default to מטבח if can't determine
+        categories['מטבח'].push(task);
+      }
+    }
+  });
+
+  // Return only categories that have tasks, in a specific order
+  const orderedCategories: TaskCategory[] = [];
+  const categoryOrder = ['מטבח', 'סלון', 'מסדרון', 'חצר'];
+  
+  categoryOrder.forEach(categoryName => {
+    if (categories[categoryName].length > 0) {
+      orderedCategories.push({
+        name: categoryName,
+        tasks: categories[categoryName],
+      });
+    }
+  });
+
+  return orderedCategories;
+}
+
 type InspectionMissionCardProps = {
   mission: InspectionMission;
   onToggleTask: (missionId: string, taskId: string) => void;
   onSave: (missionId: string) => void;
+  isCleaningInspection?: boolean;
 };
 
 function InspectionMissionCard({
   mission,
   onToggleTask,
   onSave,
+  isCleaningInspection = false,
 }: InspectionMissionCardProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -3747,7 +4510,7 @@ function InspectionMissionCard({
           </View>
 
           <View style={styles.tasksList}>
-            {categorizeTasks(mission.tasks).map(category => (
+            {(isCleaningInspection ? categorizeCleaningTasks(mission.tasks) : categorizeTasks(mission.tasks)).map(category => (
               <View key={category.name} style={styles.taskCategory}>
                 <Text style={styles.taskCategoryTitle}>{category.name}</Text>
                 {category.tasks.map(task => (
@@ -9053,26 +9816,54 @@ const styles = StyleSheet.create({
   },
   quickActionsRow: {
     flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
     gap: 12,
+    marginTop: 12,
   },
   quickActionBtn: {
-    flex: 1,
+    width: '48%',
     borderRadius: 14,
     padding: 16,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 95,
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
   quickActionIcon: {
     fontSize: 28,
     marginBottom: 6,
+    textAlign: 'center',
   },
   quickActionText: {
     color: '#fff',
     fontWeight: '800',
     fontSize: 14,
+    textAlign: 'center',
+  },
+  chatSection: {
+    marginTop: 24,
+    paddingBottom: 20,
+  },
+  chatButton: {
+    width: '100%',
+    borderRadius: 14,
+    padding: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 95,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  chatButtonIcon: {
+    fontSize: 28,
+    textAlign: 'center',
   },
   tagRow: {
     flexDirection: 'row-reverse',
@@ -9766,6 +10557,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#64748b',
     textAlign: 'center',
+  },
+  monthSection: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  monthSectionTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 2,
+    borderBottomColor: '#e2e8f0',
   },
   hotelNameContainer: {
     marginBottom: 20,
