@@ -492,6 +492,28 @@ function AppContent() {
     }
   };
 
+  const ordersByUnit = useMemo(() => {
+    const unitMap = new Map<string, { unitName: string; orders: Order[] }>();
+    
+    // Initialize all units
+    UNIT_NAMES.forEach(unitName => {
+      unitMap.set(unitName, { unitName, orders: [] });
+    });
+    
+    // Add orders to their respective units
+    orders.forEach(order => {
+      const unitName = order.unitNumber || 'לא צוין';
+      const unit = unitMap.get(unitName) || { unitName, orders: [] };
+      unit.orders.push(order);
+      unitMap.set(unitName, unit);
+    });
+    
+    // Convert to array and filter out units with no orders
+    return Array.from(unitMap.values())
+      .filter(unit => unit.orders.length > 0)
+      .sort((a, b) => a.unitName.localeCompare(b.unitName));
+  }, [orders]);
+
   const inspectionMissionsEffective = useMemo(() => {
     return (inspectionMissions || []).map(m => ({
       ...m,
@@ -1720,29 +1742,102 @@ function AppContent() {
     }
   }, [screen, selectedWarehouseId]);
 
-  const handlePickImage = () => {
-    const options: any = {
-      mediaType: 'photo' as const,
-      quality: 0.8,
-      maxWidth: 800,
-      maxHeight: 800,
-      includeBase64: true,
-    };
-    
-    launchImageLibrary(options, (response) => {
-      if (response.didCancel) {
-        console.log('User cancelled image picker');
-      } else if (response.errorMessage) {
-        Alert.alert('שגיאה', 'שגיאה בבחירת תמונה');
-      } else if (response.assets && response.assets[0]) {
-        setImageUri(response.assets[0].uri || null);
-        if (response.assets[0].base64) {
-          setImageBase64(`data:image/jpeg;base64,${response.assets[0].base64}`);
-        } else {
-          setImageBase64(null);
-        }
-      }
-    });
+  const handlePickImage = async () => {
+    Alert.alert(
+      'בחר תמונה',
+      'מה תרצה לעשות?',
+      [
+        {
+          text: 'גלריה',
+          onPress: async () => {
+            try {
+              const result = await launchImageLibrary({
+                mediaType: 'photo',
+                quality: 0.8,
+                maxWidth: 800,
+                maxHeight: 800,
+                includeBase64: true,
+              });
+              if (result.didCancel) {
+                console.log('User cancelled image picker');
+                return;
+              }
+              if (result.errorMessage) {
+                Alert.alert('שגיאה', 'שגיאה בבחירת תמונה');
+                return;
+              }
+              if (result.assets && result.assets[0]) {
+                setImageUri(result.assets[0].uri || null);
+                if (result.assets[0].base64) {
+                  setImageBase64(`data:image/jpeg;base64,${result.assets[0].base64}`);
+                } else {
+                  setImageBase64(null);
+                }
+              }
+            } catch (err: any) {
+              console.error('Error selecting image from gallery:', err);
+              Alert.alert('שגיאה', err?.message || 'לא ניתן לבחור תמונה מהגלריה');
+            }
+          },
+        },
+        {
+          text: 'מצלמה',
+          onPress: async () => {
+            try {
+              // Request camera permission on Android
+              if (Platform.OS === 'android') {
+                const granted = await PermissionsAndroid.request(
+                  PermissionsAndroid.PERMISSIONS.CAMERA,
+                  {
+                    title: 'הרשאות מצלמה',
+                    message: 'האפליקציה זקוקה להרשאה לגשת למצלמה',
+                    buttonNeutral: 'שאל אותי מאוחר יותר',
+                    buttonNegative: 'ביטול',
+                    buttonPositive: 'אישור',
+                  }
+                );
+                if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                  Alert.alert('שגיאה', 'נדרשת הרשאה לגשת למצלמה');
+                  return;
+                }
+              }
+
+              const result = await launchCamera({
+                mediaType: 'photo',
+                quality: 0.8,
+                maxWidth: 800,
+                maxHeight: 800,
+                includeBase64: true,
+              });
+              if (result.didCancel) {
+                console.log('User cancelled camera');
+                return;
+              }
+              if (result.errorMessage) {
+                Alert.alert('שגיאה', 'שגיאה בצילום תמונה');
+                return;
+              }
+              if (result.assets && result.assets[0]) {
+                setImageUri(result.assets[0].uri || null);
+                if (result.assets[0].base64) {
+                  setImageBase64(`data:image/jpeg;base64,${result.assets[0].base64}`);
+                } else {
+                  setImageBase64(null);
+                }
+              }
+            } catch (err: any) {
+              console.error('Error taking photo:', err);
+              Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם תמונה');
+            }
+          },
+        },
+        {
+          text: 'ביטול',
+          style: 'cancel',
+        },
+      ],
+      { cancelable: true }
+    );
   };
 
   const handleSign = async (mode: 'signin' | 'signup') => {
@@ -2913,29 +3008,6 @@ function AppContent() {
       />
     );
   }
-
-  // Group orders by unit (hotel)
-  const ordersByUnit = useMemo(() => {
-    const unitMap = new Map<string, { unitName: string; orders: Order[] }>();
-    
-    // Initialize all units
-    UNIT_NAMES.forEach(unitName => {
-      unitMap.set(unitName, { unitName, orders: [] });
-    });
-    
-    // Add orders to their respective units
-    orders.forEach(order => {
-      const unitName = order.unitNumber || 'לא צוין';
-      const unit = unitMap.get(unitName) || { unitName, orders: [] };
-      unit.orders.push(order);
-      unitMap.set(unitName, unit);
-    });
-    
-    // Convert to array and filter out units with no orders
-    return Array.from(unitMap.values())
-      .filter(unit => unit.orders.length > 0)
-      .sort((a, b) => a.unitName.localeCompare(b.unitName));
-  }, [orders]);
 
   const getUnitStats = (unitOrders: Order[]) => {
     const total = unitOrders.length;
