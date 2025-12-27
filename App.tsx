@@ -7774,56 +7774,127 @@ function MaintenanceTaskDetailScreen({
   };
 
   const handleCloseModalImageSelect = async () => {
-    try {
-      const result = await launchCamera({
-        mediaType: 'mixed', // Allow both photos and videos
-        includeBase64: true,
-        videoQuality: 'high',
-      });
-      if (result.didCancel) return;
-      const asset = result.assets?.[0];
-      if (!asset?.uri) {
-        Alert.alert('שגיאה', 'לא נבחר קובץ');
-        return;
-      }
-      const mime = asset.type || 'image/jpeg';
-      // For videos, use file URI directly (base64 is too large)
-      // For images, use base64 if available
-      const uri = (asset.type?.startsWith('video/') || !asset.base64) 
-        ? asset.uri 
-        : `data:${mime};base64,${asset.base64}`;
-      setCloseModalImageUri(uri);
-    } catch (err: any) {
-      console.error('Error selecting media:', err);
-      Alert.alert('שגיאה', err?.message || 'לא ניתן לבחור מדיה. בדוק את החיבור לאינטרנט.');
-    }
+    Alert.alert(
+      'בחר סוג מדיה',
+      'מה תרצה לצלם?',
+      [
+        {
+          text: 'תמונה',
+          onPress: async () => {
+            try {
+              const result = await launchCamera({
+                mediaType: 'photo',
+                includeBase64: true,
+              });
+              if (result.didCancel) return;
+              const asset = result.assets?.[0];
+              if (!asset?.uri) {
+                Alert.alert('שגיאה', 'לא נבחר קובץ');
+                return;
+              }
+              const mime = asset.type || 'image/jpeg';
+              const uri = asset.base64 
+                ? `data:${mime};base64,${asset.base64}` 
+                : asset.uri;
+              setCloseModalImageUri(uri);
+            } catch (err: any) {
+              console.error('Error selecting media:', err);
+              Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם תמונה');
+            }
+          },
+        },
+        {
+          text: 'וידאו',
+          onPress: async () => {
+            try {
+              const result = await launchCamera({
+                mediaType: 'video',
+                videoQuality: 'high',
+              });
+              if (result.didCancel) return;
+              const asset = result.assets?.[0];
+              if (!asset?.uri) {
+                Alert.alert('שגיאה', 'לא נבחר קובץ');
+                return;
+              }
+              const mime = asset.type || 'video/mp4';
+              setCloseModalImageUri(asset.uri);
+            } catch (err: any) {
+              console.error('Error selecting media:', err);
+              Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם וידאו');
+            }
+          },
+        },
+        {
+          text: 'ביטול',
+          style: 'cancel',
+        },
+      ],
+      { cancelable: true }
+    );
   };
 
   const handleEditMediaSelect = async () => {
-    try {
-      const result = await launchCamera({
-        mediaType: 'mixed', // Allow both photos and videos
-        includeBase64: true,
-        videoQuality: 'high',
-      });
-      if (result.didCancel) return;
-      const asset = result.assets?.[0];
-      if (!asset?.uri) {
-        Alert.alert('שגיאה', 'לא נבחר קובץ');
-        return;
-      }
-      const mime = asset.type || 'image/jpeg';
-      // For videos, use file URI directly (base64 is too large)
-      // For images, use base64 if available
-      const uri = (asset.type?.startsWith('video/') || !asset.base64) 
-        ? asset.uri 
-        : `data:${mime};base64,${asset.base64}`;
-      setEditMediaUri(uri);
-      setHasNewMedia(true); // Mark that new media was selected
-    } catch (err: any) {
-      console.error('Error selecting media:', err);
-      Alert.alert('שגיאה', err?.message || 'לא ניתן לבחור מדיה. בדוק את החיבור לאינטרנט.');
-    }
+    Alert.alert(
+      'בחר סוג מדיה',
+      'מה תרצה לצלם?',
+      [
+        {
+          text: 'תמונה',
+          onPress: async () => {
+            try {
+              const result = await launchCamera({
+                mediaType: 'photo',
+                includeBase64: true,
+              });
+              if (result.didCancel) return;
+              const asset = result.assets?.[0];
+              if (!asset?.uri) {
+                Alert.alert('שגיאה', 'לא נבחר קובץ');
+                return;
+              }
+              const mime = asset.type || 'image/jpeg';
+              const uri = asset.base64 
+                ? `data:${mime};base64,${asset.base64}` 
+                : asset.uri;
+              setEditMediaUri(uri);
+              setHasNewMedia(true); // Mark that new media was selected
+            } catch (err: any) {
+              console.error('Error selecting media:', err);
+              Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם תמונה');
+            }
+          },
+        },
+        {
+          text: 'וידאו',
+          onPress: async () => {
+            try {
+              const result = await launchCamera({
+                mediaType: 'video',
+                videoQuality: 'high',
+              });
+              if (result.didCancel) return;
+              const asset = result.assets?.[0];
+              if (!asset?.uri) {
+                Alert.alert('שגיאה', 'לא נבחר קובץ');
+                return;
+              }
+              const mime = asset.type || 'video/mp4';
+              setEditMediaUri(asset.uri);
+              setHasNewMedia(true); // Mark that new media was selected
+            } catch (err: any) {
+              console.error('Error selecting media:', err);
+              Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם וידאו');
+            }
+          },
+        },
+        {
+          text: 'ביטול',
+          style: 'cancel',
+        },
+      ],
+      { cancelable: true }
+    );
   };
 
   const handleSaveEditMedia = async () => {
@@ -8198,29 +8269,64 @@ function NewMaintenanceTaskScreen({
   }, [assignedTo, userName, systemUsers]);
 
   const handlePickMedia = async () => {
-    try {
-      const result = await launchCamera({
-        mediaType: 'mixed', // Allow both photos and videos
-        includeBase64: true,
-        videoQuality: 'high',
-      });
-      if (result.didCancel) return;
-      const asset = result.assets?.[0];
-      if (!asset?.uri) {
-        Alert.alert('שגיאה', 'לא נבחר קובץ');
-        return;
-      }
-      const mime = asset.type || 'image/jpeg';
-      const name = asset.fileName || `media-${Date.now()}`;
-      // For videos, use file URI directly (base64 is too large)
-      // For images, use base64 if available
-      const uri = (asset.type?.startsWith('video/') || !asset.base64) 
-        ? asset.uri 
-        : `data:${mime};base64,${asset.base64}`;
-      setMedia({ uri, type: mime, name });
-    } catch (err: any) {
-      Alert.alert('שגיאה', err?.message || 'לא ניתן לבחור מדיה');
-    }
+    Alert.alert(
+      'בחר סוג מדיה',
+      'מה תרצה לצלם?',
+      [
+        {
+          text: 'תמונה',
+          onPress: async () => {
+            try {
+              const result = await launchCamera({
+                mediaType: 'photo',
+                includeBase64: true,
+              });
+              if (result.didCancel) return;
+              const asset = result.assets?.[0];
+              if (!asset?.uri) {
+                Alert.alert('שגיאה', 'לא נבחר קובץ');
+                return;
+              }
+              const mime = asset.type || 'image/jpeg';
+              const name = asset.fileName || `media-${Date.now()}`;
+              const uri = asset.base64 
+                ? `data:${mime};base64,${asset.base64}` 
+                : asset.uri;
+              setMedia({ uri, type: mime, name });
+            } catch (err: any) {
+              Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם תמונה');
+            }
+          },
+        },
+        {
+          text: 'וידאו',
+          onPress: async () => {
+            try {
+              const result = await launchCamera({
+                mediaType: 'video',
+                videoQuality: 'high',
+              });
+              if (result.didCancel) return;
+              const asset = result.assets?.[0];
+              if (!asset?.uri) {
+                Alert.alert('שגיאה', 'לא נבחר קובץ');
+                return;
+              }
+              const mime = asset.type || 'video/mp4';
+              const name = asset.fileName || `media-${Date.now()}`;
+              setMedia({ uri: asset.uri, type: mime, name });
+            } catch (err: any) {
+              Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם וידאו');
+            }
+          },
+        },
+        {
+          text: 'ביטול',
+          style: 'cancel',
+        },
+      ],
+      { cancelable: true }
+    );
   };
 
   const handleSave = () => {
