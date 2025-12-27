@@ -8110,12 +8110,6 @@ function MaintenanceTaskDetailScreen({
                       <Text style={styles.uploadImageButtonText}>העלה אחר</Text>
                     </Pressable>
                     <Pressable
-                      onPress={handleConfirmClose}
-                      style={[styles.closeModalGridButton, styles.closeTaskButton]}
-                    >
-                      <Text style={styles.closeTaskButtonText}>סגור משימה</Text>
-                    </Pressable>
-                    <Pressable
                       onPress={() => setShowCloseModal(false)}
                       style={[styles.closeModalGridButton, styles.modalButtonGhost]}
                     >
