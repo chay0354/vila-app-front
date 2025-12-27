@@ -2841,6 +2841,38 @@ function AppContent() {
     );
   }
 
+  // Group orders by unit (hotel)
+  const ordersByUnit = useMemo(() => {
+    const unitMap = new Map<string, { unitName: string; orders: Order[] }>();
+    
+    // Initialize all units
+    UNIT_NAMES.forEach(unitName => {
+      unitMap.set(unitName, { unitName, orders: [] });
+    });
+    
+    // Add orders to their respective units
+    orders.forEach(order => {
+      const unitName = order.unitNumber || 'לא צוין';
+      const unit = unitMap.get(unitName) || { unitName, orders: [] };
+      unit.orders.push(order);
+      unitMap.set(unitName, unit);
+    });
+    
+    // Convert to array and filter out units with no orders
+    return Array.from(unitMap.values())
+      .filter(unit => unit.orders.length > 0)
+      .sort((a, b) => a.unitName.localeCompare(b.unitName));
+  }, [orders]);
+
+  const getUnitStats = (unitOrders: Order[]) => {
+    const total = unitOrders.length;
+    const paid = unitOrders.filter(o => 
+      o.status === 'שולם' || (o.totalAmount > 0 && o.paidAmount >= o.totalAmount)
+    ).length;
+    const unpaid = total - paid;
+    return { total, paid, unpaid };
+  };
+
   return (
     <SafeAreaView
       style={[styles.container, { paddingTop: safeAreaInsets.top }]}
@@ -2895,17 +2927,48 @@ function AppContent() {
             <Text style={styles.emptyOrdersText}>אין הזמנות כרגע</Text>
           </View>
         ) : (
-          orders.map(order => (
-            <OrderCard
-              key={order.id}
-              order={order}
-              onUpdate={updateOrder}
-              onEdit={id => {
-                setSelectedOrderId(id);
-                setScreen('orderEdit');
-              }}
-            />
-          ))
+          <View style={styles.ordersUnitsGrid}>
+            {ordersByUnit.map(unit => {
+              const stats = getUnitStats(unit.orders);
+              return (
+                <Pressable
+                  key={unit.unitName}
+                  style={styles.ordersUnitCard}
+                  onPress={() => {
+                    // Could navigate to unit-specific order view later
+                  }}
+                >
+                  <View style={styles.ordersUnitCardHeader}>
+                    <View style={styles.ordersUnitIcon}>
+                      <Text style={styles.ordersUnitIconText}>🏠</Text>
+                    </View>
+                    <View style={styles.ordersUnitCardContent}>
+                      <Text style={styles.ordersUnitCardName}>{unit.unitName}</Text>
+                      <Text style={styles.ordersUnitCardType}>יחידת נופש</Text>
+                    </View>
+                  </View>
+                  <View style={styles.ordersUnitStats}>
+                    <View style={styles.ordersUnitStatItem}>
+                      <Text style={styles.ordersUnitStatValue}>{stats.total}</Text>
+                      <Text style={styles.ordersUnitStatLabel}>סה״כ הזמנות</Text>
+                    </View>
+                    <View style={styles.ordersUnitStatItem}>
+                      <Text style={[styles.ordersUnitStatValue, { color: '#22c55e' }]}>
+                        {stats.paid}
+                      </Text>
+                      <Text style={styles.ordersUnitStatLabel}>שולם</Text>
+                    </View>
+                    <View style={styles.ordersUnitStatItem}>
+                      <Text style={[styles.ordersUnitStatValue, { color: '#f59e0b' }]}>
+                        {stats.unpaid}
+                      </Text>
+                      <Text style={styles.ordersUnitStatLabel}>לא שולם</Text>
+                    </View>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -13269,6 +13332,73 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#dc2626',
     lineHeight: 20,
+  },
+  ordersUnitsGrid: {
+    marginTop: 16,
+    gap: 16,
+  },
+  ordersUnitCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  ordersUnitCardHeader: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  ordersUnitIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#f0f9ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 12,
+  },
+  ordersUnitIconText: {
+    fontSize: 28,
+  },
+  ordersUnitCardContent: {
+    flex: 1,
+  },
+  ordersUnitCardName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'right',
+  },
+  ordersUnitCardType: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'right',
+    marginTop: 4,
+  },
+  ordersUnitStats: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-around',
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+  },
+  ordersUnitStatItem: {
+    alignItems: 'center',
+  },
+  ordersUnitStatValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  ordersUnitStatLabel: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 4,
   },
 });
 
