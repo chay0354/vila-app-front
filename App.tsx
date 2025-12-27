@@ -383,6 +383,7 @@ function AppContent() {
   const [allWarehouseItems, setAllWarehouseItems] = useState<Array<{id: string; warehouse_id: string; item_id: string; item_name: string; quantity: number; unit: string}>>([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null);
   const [selectedUnit, setSelectedUnit] = useState<string>('כל המתחמים');
+  const [selectedOrderUnit, setSelectedOrderUnit] = useState<string | null>(null);
   const [maintenanceUnits, setMaintenanceUnits] = useState<MaintenanceUnit[]>(initialMaintenanceUnits);
   const [selectedMaintenanceUnitId, setSelectedMaintenanceUnitId] = useState<string | null>(null);
   const [selectedMaintenanceTaskId, setSelectedMaintenanceTaskId] = useState<string | null>(null);
@@ -2841,8 +2842,6 @@ function AppContent() {
     );
   }
 
-  const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
-
   // Group orders by unit (hotel)
   const ordersByUnit = useMemo(() => {
     const unitMap = new Map<string, { unitName: string; orders: Order[] }>();
@@ -2928,20 +2927,20 @@ function AppContent() {
           <View style={styles.emptyOrdersState}>
             <Text style={styles.emptyOrdersText}>אין הזמנות כרגע</Text>
           </View>
-        ) : selectedUnit ? (
+        ) : selectedOrderUnit ? (
           <View>
             <View style={styles.ordersUnitHeader}>
               <Pressable
                 style={styles.ordersBackToUnitsButton}
-                onPress={() => setSelectedUnit(null)}
+                onPress={() => setSelectedOrderUnit(null)}
               >
                 <Text style={styles.ordersBackToUnitsButtonText}>← חזרה לרשימת יחידות</Text>
               </Pressable>
-              <Text style={styles.ordersUnitTitle}>הזמנות - {selectedUnit}</Text>
+              <Text style={styles.ordersUnitTitle}>הזמנות - {selectedOrderUnit}</Text>
             </View>
             <View style={styles.ordersList}>
               {orders
-                .filter(order => order.unitNumber === selectedUnit)
+                .filter(order => order.unitNumber === selectedOrderUnit)
                 .map(order => (
                   <OrderCard
                     key={order.id}
@@ -2963,7 +2962,7 @@ function AppContent() {
                 <Pressable
                   key={unit.unitName}
                   style={styles.ordersUnitCard}
-                  onPress={() => setSelectedUnit(unit.unitName)}
+                  onPress={() => setSelectedOrderUnit(unit.unitName)}
                 >
                   <View style={styles.ordersUnitCardHeader}>
                     <View style={styles.ordersUnitIcon}>
@@ -7776,10 +7775,10 @@ function MaintenanceTaskDetailScreen({
 
   const handleCloseModalImageSelect = async () => {
     try {
-      const result = await launchImageLibrary({
+      const result = await launchCamera({
         mediaType: 'mixed', // Allow both photos and videos
-        selectionLimit: 1,
         includeBase64: true,
+        videoQuality: 'high',
       });
       if (result.didCancel) return;
       const asset = result.assets?.[0];
@@ -7802,10 +7801,10 @@ function MaintenanceTaskDetailScreen({
 
   const handleEditMediaSelect = async () => {
     try {
-      const result = await launchImageLibrary({
+      const result = await launchCamera({
         mediaType: 'mixed', // Allow both photos and videos
-        selectionLimit: 1,
         includeBase64: true,
+        videoQuality: 'high',
       });
       if (result.didCancel) return;
       const asset = result.assets?.[0];
@@ -8200,10 +8199,10 @@ function NewMaintenanceTaskScreen({
 
   const handlePickMedia = async () => {
     try {
-      const result = await launchImageLibrary({
+      const result = await launchCamera({
         mediaType: 'mixed', // Allow both photos and videos
-        selectionLimit: 1,
         includeBase64: true,
+        videoQuality: 'high',
       });
       if (result.didCancel) return;
       const asset = result.assets?.[0];
