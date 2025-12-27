@@ -2841,6 +2841,8 @@ function AppContent() {
     );
   }
 
+  const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
+
   // Group orders by unit (hotel)
   const ordersByUnit = useMemo(() => {
     const unitMap = new Map<string, { unitName: string; orders: Order[] }>();
@@ -2926,6 +2928,33 @@ function AppContent() {
           <View style={styles.emptyOrdersState}>
             <Text style={styles.emptyOrdersText}>אין הזמנות כרגע</Text>
           </View>
+        ) : selectedUnit ? (
+          <View>
+            <View style={styles.ordersUnitHeader}>
+              <Pressable
+                style={styles.ordersBackToUnitsButton}
+                onPress={() => setSelectedUnit(null)}
+              >
+                <Text style={styles.ordersBackToUnitsButtonText}>← חזרה לרשימת יחידות</Text>
+              </Pressable>
+              <Text style={styles.ordersUnitTitle}>הזמנות - {selectedUnit}</Text>
+            </View>
+            <View style={styles.ordersList}>
+              {orders
+                .filter(order => order.unitNumber === selectedUnit)
+                .map(order => (
+                  <OrderCard
+                    key={order.id}
+                    order={order}
+                    onUpdate={updateOrder}
+                    onEdit={id => {
+                      setSelectedOrderId(id);
+                      setScreen('orderEdit');
+                    }}
+                  />
+                ))}
+            </View>
+          </View>
         ) : (
           <View style={styles.ordersUnitsGrid}>
             {ordersByUnit.map(unit => {
@@ -2934,9 +2963,7 @@ function AppContent() {
                 <Pressable
                   key={unit.unitName}
                   style={styles.ordersUnitCard}
-                  onPress={() => {
-                    // Could navigate to unit-specific order view later
-                  }}
+                  onPress={() => setSelectedUnit(unit.unitName)}
                 >
                   <View style={styles.ordersUnitCardHeader}>
                     <View style={styles.ordersUnitIcon}>
@@ -13399,6 +13426,35 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
     marginTop: 4,
+  },
+  ordersUnitHeader: {
+    marginTop: 16,
+    marginBottom: 16,
+  },
+  ordersBackToUnitsButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#3b82f6',
+    borderWidth: 1,
+    borderColor: '#2563eb',
+    marginBottom: 12,
+    alignSelf: 'flex-start',
+  },
+  ordersBackToUnitsButtonText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  ordersUnitTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    textAlign: 'right',
+    color: '#0f172a',
+  },
+  ordersList: {
+    marginTop: 16,
+    gap: 16,
   },
 });
 
