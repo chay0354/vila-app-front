@@ -46,7 +46,7 @@ try {
 
 import { API_BASE_URL } from './src/apiConfig';
 
-type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'exitInspections' | 'cleaningInspections' | 'monthlyInspections' | 'warehouse' | 'warehouseMenu' | 'warehouseOrders' | 'warehouseInventory' | 'warehouseInventoryDetail' | 'newWarehouse' | 'newWarehouseItem' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask' | 'reports' | 'chat' | 'attendance' | 'invoices' | 'cleaningSchedule';
+type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'exitInspections' | 'cleaningInspections' | 'monthlyInspections' | 'warehouse' | 'warehouseMenu' | 'warehouseOrders' | 'warehouseInventory' | 'warehouseInventoryDetail' | 'newWarehouse' | 'newWarehouseItem' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask' | 'reports' | 'chat' | 'attendance' | 'invoices' | 'cleaningSchedule' | 'employeeManagement';
 type OrderStatus = 'חדש' | 'באישור' | 'שולם חלקית' | 'שולם' | 'בוטל';
 type InspectionStatus =
   | 'זמן הביקורות טרם הגיע'
@@ -394,6 +394,8 @@ function AppContent() {
   const [reportsSummaryError, setReportsSummaryError] = useState<string | null>(null);
   const [maintenanceTasksReport, setMaintenanceTasksReport] = useState<any[]>([]);
   const [invoices, setInvoices] = useState<Array<{id: string; total_price?: number | null; extracted_data?: any}>>([]);
+  const [employees, setEmployees] = useState<Array<{id: string; username: string; image_url?: string | null; hourly_wage?: number | null; role?: string | null}>>([]);
+  const [allAttendanceLogs, setAllAttendanceLogs] = useState<any[]>([]);
   // Track previous state for notifications
   const [previousMaintenanceTasks, setPreviousMaintenanceTasks] = useState<any[]>([]);
   const [previousChatMessages, setPreviousChatMessages] = useState<Array<{id: number; sender: string; content: string; created_at: string}>>([]);
@@ -1352,6 +1354,34 @@ function AppContent() {
     }
   };
 
+  const loadEmployees = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/users/with-details`);
+      if (!res.ok) {
+        console.error('Failed to load employees:', res.status);
+        return;
+      }
+      const data = await res.json();
+      setEmployees(data || []);
+    } catch (err) {
+      console.error('Error loading employees:', err);
+    }
+  };
+
+  const loadAllAttendanceLogs = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/attendance/logs/all`);
+      if (!res.ok) {
+        console.error('Failed to load all attendance logs:', res.status);
+        return;
+      }
+      const data = await res.json();
+      setAllAttendanceLogs(data || []);
+    } catch (err) {
+      console.error('Error loading all attendance logs:', err);
+    }
+  };
+
   const loadMaintenanceTasksReport = async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks`);
@@ -1568,6 +1598,10 @@ function AppContent() {
       loadMaintenanceTasksReport();
       loadAttendanceLogsReport();
       if (userName) loadAttendanceStatus();
+    }
+    if (screen === 'employeeManagement') {
+      loadEmployees();
+      loadAllAttendanceLogs();
     }
   }, [screen, userName]);
 
@@ -2060,29 +2094,39 @@ function AppContent() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.hubTopRow}>
-            <View style={styles.brandBadge}>
-              <View style={styles.brandDot} />
-              <Text style={styles.brandText}>Seisignes</Text>
-            </View>
+            <Pressable
+              onPress={() => {
+                setUserName(null);
+                setUserRole(null);
+                setUserImageUrl(null);
+                setScreen('signin');
+              }}
+              style={styles.signOutButton}
+            >
+              <Text style={styles.signOutIcon}>🚪</Text>
+              <Text style={styles.signOutText}>יציאה</Text>
+            </Pressable>
             <View style={styles.userChip}>
               <Text style={styles.userChipText}>שלום {userName}</Text>
             </View>
           </View>
 
-          <View style={styles.statsGrid}>
-            <View style={[styles.statCard, { backgroundColor: '#dbeafe', borderColor: '#3b82f6' }]}>
-              <Text style={styles.statValue}>{totals.count}</Text>
-              <Text style={styles.statLabel}>מספר הזמנות</Text>
+          {userRole === 'מנהל' && (
+            <View style={styles.statsGrid}>
+              <View style={[styles.statCard, { backgroundColor: '#dbeafe', borderColor: '#3b82f6' }]}>
+                <Text style={styles.statValue}>{totals.count}</Text>
+                <Text style={styles.statLabel}>מספר הזמנות</Text>
+              </View>
+              <View style={[styles.statCard, { backgroundColor: '#dcfce7', borderColor: '#22c55e' }]}>
+                <Text style={styles.statValue}>₪{totalRevenue.toLocaleString('he-IL')}</Text>
+                <Text style={styles.statLabel}>הכנסות</Text>
+              </View>
+              <View style={[styles.statCard, { backgroundColor: '#fee2e2', borderColor: '#ef4444' }]}>
+                <Text style={styles.statValue}>₪{totalExpenses.toLocaleString('he-IL')}</Text>
+                <Text style={styles.statLabel}>הוצאות</Text>
+              </View>
             </View>
-            <View style={[styles.statCard, { backgroundColor: '#dcfce7', borderColor: '#22c55e' }]}>
-              <Text style={styles.statValue}>₪{totalRevenue.toLocaleString('he-IL')}</Text>
-              <Text style={styles.statLabel}>הכנסות</Text>
-            </View>
-            <View style={[styles.statCard, { backgroundColor: '#fee2e2', borderColor: '#ef4444' }]}>
-              <Text style={styles.statValue}>₪{totalExpenses.toLocaleString('he-IL')}</Text>
-              <Text style={styles.statLabel}>הוצאות</Text>
-            </View>
-          </View>
+          )}
 
           <View style={styles.welcomeSection}>
             <View style={styles.welcomeCard}>
@@ -2183,15 +2227,27 @@ function AppContent() {
                   </Pressable>
                 </>
               )}
-              <Pressable
-                style={[styles.quickActionBtn, { backgroundColor: '#ec4899' }]}
-                onPress={() => setScreen('attendance')}
-              >
-                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={styles.quickActionIcon}>⏱️</Text>
-                  <Text style={styles.quickActionText}>שעון נוכחות</Text>
-                </View>
-              </Pressable>
+              {userRole === 'מנהל' ? (
+                <Pressable
+                  style={[styles.quickActionBtn, { backgroundColor: '#ec4899' }]}
+                  onPress={() => setScreen('employeeManagement')}
+                >
+                  <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={styles.quickActionIcon}>👥</Text>
+                    <Text style={styles.quickActionText}>ניהול עובדים</Text>
+                  </View>
+                </Pressable>
+              ) : (
+                <Pressable
+                  style={[styles.quickActionBtn, { backgroundColor: '#ec4899' }]}
+                  onPress={() => setScreen('attendance')}
+                >
+                  <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={styles.quickActionIcon}>⏱️</Text>
+                    <Text style={styles.quickActionText}>שעון נוכחות</Text>
+                  </View>
+                </Pressable>
+              )}
               <Pressable
                 style={[styles.quickActionBtn, { backgroundColor: '#10b981' }]}
                 onPress={() => setScreen('cleaningSchedule')}
@@ -2693,6 +2749,22 @@ function AppContent() {
           loadAttendanceLogsReport();
         }}
         onBack={() => setScreen('hub')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
+  if (screen === 'employeeManagement') {
+    return (
+      <EmployeeManagementScreen
+        employees={employees}
+        attendanceLogs={allAttendanceLogs}
+        onBack={() => setScreen('hub')}
+        onRefresh={() => {
+          loadEmployees();
+          loadAllAttendanceLogs();
+        }}
         safeAreaInsets={safeAreaInsets}
         statusBar={statusBar}
       />
@@ -7294,6 +7366,304 @@ function ChatScreen({
           </Pressable>
         </View>
       </View>
+    </SafeAreaView>
+  );
+}
+
+// Employee Management Screen
+type EmployeeManagementScreenProps = {
+  employees: Array<{id: string; username: string; image_url?: string | null; hourly_wage?: number | null; role?: string | null}>;
+  attendanceLogs: any[];
+  onBack: () => void;
+  onRefresh: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+};
+
+function EmployeeManagementScreen({
+  employees,
+  attendanceLogs,
+  onBack,
+  onRefresh,
+  safeAreaInsets,
+  statusBar,
+}: EmployeeManagementScreenProps) {
+  const [editingWage, setEditingWage] = useState<string | null>(null);
+  const [wageInput, setWageInput] = useState<string>('');
+  const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
+
+  const getFilteredLogs = (employeeUsername: string) => {
+    return attendanceLogs.filter((log: any) => log.employee === employeeUsername);
+  };
+
+  const calculateHours = (logs: any[]) => {
+    return logs.reduce((total, log) => {
+      const clockIn = new Date(log.clock_in);
+      const clockOut = log.clock_out ? new Date(log.clock_out) : new Date();
+      const hours = (clockOut.getTime() - clockIn.getTime()) / (1000 * 60 * 60);
+      return total + Math.max(0, hours);
+    }, 0);
+  };
+
+  const employeesWithStats = useMemo(() => {
+    const employeeAccounts = employees.filter(emp => emp.role !== 'מנהל');
+    
+    return employeeAccounts.map(emp => {
+      const logs = getFilteredLogs(emp.username);
+      const hours = calculateHours(logs);
+      const wage = emp.hourly_wage || 0;
+      const earnings = hours * wage;
+      
+      return {
+        ...emp,
+        hours: hours.toFixed(2),
+        earnings: earnings.toFixed(2),
+        sessionsCount: logs.length,
+      };
+    });
+  }, [employees, attendanceLogs]);
+
+  const selectedEmployeeData = useMemo(() => {
+    if (!selectedEmployee) return null;
+    const emp = employees.find(e => e.id === selectedEmployee);
+    if (!emp) return null;
+    
+    const logs = getFilteredLogs(emp.username);
+    const sortedLogs = [...logs].sort((a, b) => 
+      new Date(b.clock_in).getTime() - new Date(a.clock_in).getTime()
+    );
+    
+    return {
+      ...emp,
+      logs: sortedLogs.map((log: any) => {
+        const clockIn = new Date(log.clock_in);
+        const clockOut = log.clock_out ? new Date(log.clock_out) : null;
+        const hours = clockOut 
+          ? (clockOut.getTime() - clockIn.getTime()) / (1000 * 60 * 60)
+          : (new Date().getTime() - clockIn.getTime()) / (1000 * 60 * 60);
+        
+        return {
+          ...log,
+          date: clockIn.toLocaleDateString('he-IL'),
+          timeIn: clockIn.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }),
+          timeOut: clockOut?.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) || 'פתוח',
+          hours: hours.toFixed(2),
+          isOpen: !clockOut,
+        };
+      }),
+    };
+  }, [selectedEmployee, employees, attendanceLogs]);
+
+  const updateWage = async (employeeId: string, wage: number) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/users/${employeeId}/wage`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hourly_wage: wage }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+        Alert.alert('שגיאה', errorData.detail || 'לא ניתן לעדכן את השכר');
+        return;
+      }
+      onRefresh();
+      setEditingWage(null);
+      setWageInput('');
+      Alert.alert('הצלחה', 'השכר עודכן בהצלחה');
+    } catch (err: any) {
+      Alert.alert('שגיאה', err.message || 'אירעה שגיאה בעדכון השכר');
+    }
+  };
+
+  const handleStartEditWage = (employee: any) => {
+    setEditingWage(employee.id);
+    setWageInput(employee.hourly_wage?.toString() || '');
+  };
+
+  const handleSaveWage = (employeeId: string) => {
+    const wage = parseFloat(wageInput);
+    if (isNaN(wage) || wage < 0) {
+      Alert.alert('שגיאה', 'אנא הזן שכר שעתי תקין');
+      return;
+    }
+    updateWage(employeeId, wage);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingWage(null);
+    setWageInput('');
+  };
+
+  return (
+    <SafeAreaView style={[styles.container, { paddingTop: safeAreaInsets.top }]}>
+      {statusBar}
+      <View style={styles.header}>
+        <Pressable onPress={onBack} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+      </View>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.title}>ניהול עובדים</Text>
+
+        <View style={styles.employeeGrid}>
+          {employeesWithStats.map(emp => (
+            <Pressable
+              key={emp.id}
+              onPress={() => setSelectedEmployee(selectedEmployee === emp.id ? null : emp.id)}
+              style={[
+                styles.employeeCard,
+                selectedEmployee === emp.id && styles.employeeCardSelected,
+              ]}
+            >
+              <View style={styles.employeeCardHeader}>
+                <View style={styles.employeeAvatar}>
+                  {emp.image_url ? (
+                    <Image source={{ uri: emp.image_url }} style={styles.employeeAvatarImage} />
+                  ) : (
+                    <View style={styles.employeeAvatarPlaceholder}>
+                      <Text style={styles.employeeAvatarIcon}>👤</Text>
+                    </View>
+                  )}
+                </View>
+                <View style={styles.employeeInfo}>
+                  <Text style={styles.employeeName}>{emp.username}</Text>
+                </View>
+              </View>
+
+              <View style={styles.employeeWageSection}>
+                {editingWage === emp.id ? (
+                  <View style={styles.employeeWageEdit}>
+                    <TextInput
+                      style={styles.employeeWageInput}
+                      value={wageInput}
+                      onChangeText={setWageInput}
+                      placeholder="שכר שעתי"
+                      keyboardType="numeric"
+                      onPressIn={(e) => e.stopPropagation()}
+                    />
+                    <View style={styles.employeeWageActions}>
+                      <Pressable
+                        style={styles.employeeWageSave}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          handleSaveWage(emp.id);
+                        }}
+                      >
+                        <Text style={styles.employeeWageSaveText}>שמור</Text>
+                      </Pressable>
+                      <Pressable
+                        style={styles.employeeWageCancel}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          handleCancelEdit();
+                        }}
+                      >
+                        <Text style={styles.employeeWageCancelText}>ביטול</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.employeeWageDisplay}>
+                    <Text style={styles.employeeWageLabel}>שכר שעתי:</Text>
+                    <Text style={styles.employeeWageValue}>
+                      {emp.hourly_wage ? `₪${emp.hourly_wage.toLocaleString('he-IL')}` : 'לא הוגדר'}
+                    </Text>
+                    <Pressable
+                      style={styles.employeeWageEditButton}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        handleStartEditWage(emp);
+                      }}
+                    >
+                      <Text style={styles.employeeWageEditButtonText}>ערוך</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            </Pressable>
+          ))}
+        </View>
+
+        {selectedEmployeeData && (
+          <Modal
+            visible={selectedEmployee !== null}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setSelectedEmployee(null)}
+          >
+            <Pressable
+              style={styles.modalOverlay}
+              onPress={() => setSelectedEmployee(null)}
+            >
+              <Pressable
+                style={styles.modalContent}
+                onPress={(e) => e.stopPropagation()}
+              >
+                <View style={styles.modalHeader}>
+                  <View style={styles.modalHeaderContent}>
+                    <View style={styles.modalAvatar}>
+                      {selectedEmployeeData.image_url ? (
+                        <Image source={{ uri: selectedEmployeeData.image_url }} style={styles.modalAvatarImage} />
+                      ) : (
+                        <View style={styles.modalAvatarPlaceholder}>
+                          <Text style={styles.modalAvatarIcon}>👤</Text>
+                        </View>
+                      )}
+                    </View>
+                    <View>
+                      <Text style={styles.modalTitle}>{selectedEmployeeData.username}</Text>
+                      <Text style={styles.modalSubtitle}>פירוט שעות עבודה</Text>
+                    </View>
+                  </View>
+                  <Pressable
+                    onPress={() => setSelectedEmployee(null)}
+                    style={styles.modalClose}
+                  >
+                    <Text style={styles.modalCloseText}>✕</Text>
+                  </Pressable>
+                </View>
+                
+                <ScrollView style={styles.modalScroll}>
+                  {selectedEmployeeData.logs.length === 0 ? (
+                    <Text style={styles.modalEmpty}>אין שעות עבודה</Text>
+                  ) : (
+                    <View style={styles.sessionsList}>
+                      {selectedEmployeeData.logs.map((session: any, idx: number) => (
+                        <View key={session.id || idx} style={styles.sessionItem}>
+                          <View style={styles.sessionHeader}>
+                            <Text style={styles.sessionDate}>{session.date}</Text>
+                            <View style={styles.sessionHoursBadge}>
+                              <Text style={styles.sessionHoursValue}>{session.hours} שעות</Text>
+                              {session.isOpen && (
+                                <View style={styles.sessionOpenBadge}>
+                                  <Text style={styles.sessionOpenBadgeText}>פתוח</Text>
+                                </View>
+                              )}
+                            </View>
+                          </View>
+                          <View style={styles.sessionTimes}>
+                            <View style={styles.sessionTimeItem}>
+                              <Text style={styles.sessionTimeLabel}>כניסה:</Text>
+                              <Text style={styles.sessionTimeValue}>{session.timeIn}</Text>
+                            </View>
+                            <View style={styles.sessionTimeItem}>
+                              <Text style={styles.sessionTimeLabel}>יציאה:</Text>
+                              <Text style={styles.sessionTimeValue}>{session.timeOut}</Text>
+                            </View>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </ScrollView>
+              </Pressable>
+            </Pressable>
+          </Modal>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -13540,6 +13910,309 @@ const styles = StyleSheet.create({
   ordersList: {
     marginTop: 16,
     gap: 16,
+  },
+  signOutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  signOutIcon: {
+    fontSize: 18,
+  },
+  signOutText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  header: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    backgroundColor: '#fff',
+  },
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  employeeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 16,
+  },
+  employeeCard: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  employeeCardSelected: {
+    borderColor: '#3b82f6',
+    borderWidth: 2,
+  },
+  employeeCardHeader: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  employeeAvatar: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    overflow: 'hidden',
+    backgroundColor: '#f1f5f9',
+  },
+  employeeAvatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  employeeAvatarPlaceholder: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#e2e8f0',
+  },
+  employeeAvatarIcon: {
+    fontSize: 30,
+  },
+  employeeInfo: {
+    flex: 1,
+  },
+  employeeName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'right',
+  },
+  employeeWageSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  employeeWageDisplay: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  employeeWageLabel: {
+    fontSize: 14,
+    color: '#64748b',
+  },
+  employeeWageValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  employeeWageEditButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#3b82f6',
+    borderRadius: 6,
+  },
+  employeeWageEditButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  employeeWageEdit: {
+    gap: 8,
+  },
+  employeeWageInput: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    backgroundColor: '#fff',
+    textAlign: 'left',
+  },
+  employeeWageActions: {
+    flexDirection: 'row-reverse',
+    gap: 8,
+  },
+  employeeWageSave: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#22c55e',
+    borderRadius: 6,
+  },
+  employeeWageSaveText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  employeeWageCancel: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#ef4444',
+    borderRadius: 6,
+  },
+  employeeWageCancelText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  modalHeaderContent: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  modalAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    overflow: 'hidden',
+    backgroundColor: '#f1f5f9',
+  },
+  modalAvatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  modalAvatarPlaceholder: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#e2e8f0',
+  },
+  modalAvatarIcon: {
+    fontSize: 24,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
+    marginTop: 4,
+  },
+  modalClose: {
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCloseText: {
+    fontSize: 24,
+    color: '#64748b',
+  },
+  modalScroll: {
+    maxHeight: 400,
+  },
+  modalEmpty: {
+    textAlign: 'center',
+    padding: 40,
+    color: '#64748b',
+    fontSize: 16,
+  },
+  sessionsList: {
+    padding: 20,
+    gap: 12,
+  },
+  sessionItem: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  sessionHeader: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  sessionDate: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  sessionHoursBadge: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sessionHoursValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3b82f6',
+    backgroundColor: '#dbeafe',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  sessionOpenBadge: {
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  sessionOpenBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#f59e0b',
+  },
+  sessionTimes: {
+    flexDirection: 'row-reverse',
+    gap: 16,
+  },
+  sessionTimeItem: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sessionTimeLabel: {
+    fontSize: 14,
+    color: '#64748b',
+  },
+  sessionTimeValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
   },
 });
 
