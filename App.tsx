@@ -119,7 +119,7 @@ type InventoryOrder = {
   orderGroupId?: string;
 };
 
-type MaintenanceStatus = 'פתוח' | 'בטיפול' | 'סגור';
+type MaintenanceStatus = 'פתוח' | 'סגור';
 
 type SystemUser = {
   id: string;
@@ -6176,14 +6176,13 @@ function ReportsScreen({
 
   const normalizeMaintenanceStatus = (s: string) => {
     if (s === 'open' || s === 'פתוח') return 'פתוח';
-    if (s === 'in_progress' || s === 'בטיפול') return 'בטיפול';
+    if (s === 'in_progress' || s === 'בטיפול') return 'פתוח'; // Convert old 'בטיפול' to 'פתוח'
     if (s === 'closed' || s === 'סגור') return 'סגור';
     return s || 'פתוח';
   };
 
   const maintenanceTotal = maintenanceTasksEffective.length;
   const maintenanceOpen = maintenanceTasksEffective.filter((t: any) => normalizeMaintenanceStatus(t.status) === 'פתוח').length;
-  const maintenanceInProgress = maintenanceTasksEffective.filter((t: any) => normalizeMaintenanceStatus(t.status) === 'בטיפול').length;
   const maintenanceClosed = maintenanceTasksEffective.filter((t: any) => normalizeMaintenanceStatus(t.status) === 'סגור').length;
 
   const maintenanceTopOpen = useMemo(() => {
@@ -6244,7 +6243,6 @@ function ReportsScreen({
         unitName: string;
         total: number;
         open: number;
-        inProgress: number;
         closed: number;
         tasks: any[];
       }
@@ -6260,14 +6258,12 @@ function ReportsScreen({
           unitName,
           total: 0,
           open: 0,
-          inProgress: 0,
           closed: 0,
           tasks: [],
         };
       const next = { ...prev };
       next.total += 1;
       if (st === 'פתוח') next.open += 1;
-      else if (st === 'בטיפול') next.inProgress += 1;
       else if (st === 'סגור') next.closed += 1;
       next.tasks = [...next.tasks, t];
       map.set(unitId, next);
@@ -6279,7 +6275,7 @@ function ReportsScreen({
         tasks: r.tasks.sort((a: any, b: any) => {
           const sa = normalizeMaintenanceStatus(a.status);
           const sb = normalizeMaintenanceStatus(b.status);
-          const order = (s: string) => (s === 'פתוח' ? 0 : s === 'בטיפול' ? 1 : 2);
+          const order = (s: string) => (s === 'פתוח' ? 0 : 1);
           const cmp = order(sa) - order(sb);
           if (cmp !== 0) return cmp;
           const da = safeDate(a.created_date || a.createdDate || '')?.getTime() || 0;
@@ -6287,7 +6283,7 @@ function ReportsScreen({
           return db - da;
         }),
       }))
-      .sort((a, b) => b.open + b.inProgress - (a.open + a.inProgress));
+      .sort((a, b) => b.open - a.open);
 
     return rows;
   }, [maintenanceTasksEffective, maintenanceUnitsMap]);
@@ -6548,7 +6544,7 @@ function ReportsScreen({
                 accent="#22c55e"
                 details={[
                   `סה״כ משימות: ${maintenanceTotal}`,
-                  `פתוח: ${maintenanceOpen} | בטיפול: ${maintenanceInProgress}`,
+                  `פתוח: ${maintenanceOpen}`,
                   `סגור: ${maintenanceClosed}`,
                 ]}
                 cta="פתח דוח מלא"
@@ -6860,10 +6856,6 @@ function ReportsScreen({
                   <Text style={styles.reportUnitKpiValue}>{maintenanceOpen}</Text>
                 </View>
                 <View style={styles.reportUnitKpiItem}>
-                  <Text style={styles.reportUnitKpiLabel}>בטיפול</Text>
-                  <Text style={styles.reportUnitKpiValue}>{maintenanceInProgress}</Text>
-                </View>
-                <View style={styles.reportUnitKpiItem}>
                   <Text style={styles.reportUnitKpiLabel}>סגור</Text>
                   <Text style={styles.reportUnitKpiValue}>{maintenanceClosed}</Text>
                 </View>
@@ -6943,10 +6935,6 @@ function ReportsScreen({
                       <View style={styles.reportUnitKpiItem}>
                         <Text style={styles.reportUnitKpiLabel}>פתוח</Text>
                         <Text style={styles.reportUnitKpiValue}>{u.open}</Text>
-                      </View>
-                      <View style={styles.reportUnitKpiItem}>
-                        <Text style={styles.reportUnitKpiLabel}>בטיפול</Text>
-                        <Text style={styles.reportUnitKpiValue}>{u.inProgress}</Text>
                       </View>
                       <View style={styles.reportUnitKpiItem}>
                         <Text style={styles.reportUnitKpiLabel}>סגור</Text>
@@ -7558,8 +7546,6 @@ function MaintenanceScreen({
     switch (status) {
       case 'פתוח':
         return '#f59e0b';
-      case 'בטיפול':
-        return '#3b82f6';
       case 'סגור':
         return '#22c55e';
       default:
@@ -7569,9 +7555,8 @@ function MaintenanceScreen({
 
   const getUnitStats = (unit: MaintenanceUnit) => {
     const open = unit.tasks.filter(t => t.status === 'פתוח').length;
-    const inProgress = unit.tasks.filter(t => t.status === 'בטיפול').length;
     const closed = unit.tasks.filter(t => t.status === 'סגור').length;
-    return { open, inProgress, closed, total: unit.tasks.length };
+    return { open, closed, total: unit.tasks.length };
   };
 
   return (
@@ -7626,12 +7611,6 @@ function MaintenanceScreen({
                     <Text style={styles.unitStatLabel}>פתוחות</Text>
                   </View>
                   <View style={styles.unitStatItem}>
-                    <Text style={[styles.unitStatValue, { color: '#3b82f6' }]}>
-                      {stats.inProgress}
-                    </Text>
-                    <Text style={styles.unitStatLabel}>בטיפול</Text>
-                  </View>
-                  <View style={styles.unitStatItem}>
                     <Text style={[styles.unitStatValue, { color: '#22c55e' }]}>
                       {stats.closed}
                     </Text>
@@ -7660,8 +7639,6 @@ function MaintenanceTasksScreen({
     switch (status) {
       case 'פתוח':
         return '#f59e0b';
-      case 'בטיפול':
-        return '#3b82f6';
       case 'סגור':
         return '#22c55e';
       default:
@@ -7797,6 +7774,11 @@ function MaintenanceTaskDetailScreen({
                 ? `data:${mime};base64,${asset.base64}` 
                 : asset.uri;
               setCloseModalImageUri(uri);
+              // Automatically close the task when media is uploaded
+              onUpdateTask(task.id, { status: 'סגור', imageUri: uri });
+              Alert.alert('הצלחה', 'המשימה נסגרה בהצלחה');
+              setShowCloseModal(false);
+              onBack();
             } catch (err: any) {
               console.error('Error selecting media:', err);
               Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם תמונה');
@@ -7818,7 +7800,11 @@ function MaintenanceTaskDetailScreen({
                 return;
               }
               const mime = asset.type || 'video/mp4';
-              setCloseModalImageUri(asset.uri);
+              // Automatically close the task when media is uploaded
+              onUpdateTask(task.id, { status: 'סגור', imageUri: asset.uri });
+              Alert.alert('הצלחה', 'המשימה נסגרה בהצלחה');
+              setShowCloseModal(false);
+              onBack();
             } catch (err: any) {
               console.error('Error selecting media:', err);
               Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם וידאו');
@@ -7911,6 +7897,8 @@ function MaintenanceTaskDetailScreen({
     }
   };
 
+  // This function is no longer needed since closing happens automatically when media is uploaded
+  // Keeping it for backward compatibility but it should not be called
   const handleConfirmClose = () => {
     if (!closeModalImageUri) {
       Alert.alert('שגיאה', 'יש להעלות תמונה או וידאו לפני סגירת המשימה');
@@ -7926,8 +7914,6 @@ function MaintenanceTaskDetailScreen({
     switch (status) {
       case 'פתוח':
         return '#f59e0b';
-      case 'בטיפול':
-        return '#3b82f6';
       case 'סגור':
         return '#22c55e';
       default:
