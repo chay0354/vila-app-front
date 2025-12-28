@@ -504,9 +504,15 @@ function AppContent() {
       }
 
       try {
-        // Request permissions
-        if (Platform.OS === 'android' && notifee.requestPermission) {
-          await notifee.requestPermission();
+        // Request permissions for both iOS and Android
+        if (notifee.requestPermission) {
+          const settings = await notifee.requestPermission();
+          // Check if permission was granted (works for both iOS and Android)
+          if (settings.authorizationStatus >= 1) { // 1 = AUTHORIZED, 0 = NOT_DETERMINED, 2 = DENIED
+            console.log('Notification permission granted');
+          } else {
+            console.warn('Notification permission denied or not determined');
+          }
         }
 
         // Create a channel for Android
