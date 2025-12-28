@@ -557,6 +557,36 @@ function AppContent() {
     }
   };
 
+  // Register push notification token with backend
+  const registerPushToken = async (username: string) => {
+    try {
+      // Generate a unique device token (in production, this would be an FCM token)
+      // For now, we'll use a combination of device info and timestamp
+      const deviceId = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const platform = Platform.OS === 'android' ? 'android' : Platform.OS === 'ios' ? 'ios' : 'web';
+      
+      // Register token with backend
+      const res = await fetch(`${API_BASE_URL}/push/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          token: deviceId,
+          platform,
+        }),
+      });
+      
+      if (res.ok) {
+        console.log('Push token registered successfully');
+      } else {
+        console.warn('Failed to register push token:', res.status);
+      }
+    } catch (error) {
+      console.warn('Error registering push token:', error);
+      // Don't show error to user - push notifications are optional
+    }
+  };
+
   const systemUserNameById = useMemo(() => {
     const m = new Map<string, string>();
     (systemUsers || []).forEach(u => {
@@ -2023,7 +2053,8 @@ function AppContent() {
       }
       
       // Success - set user and navigate to hub
-      setUserName(data.username || name.trim());
+      const username = data.username || name.trim();
+      setUserName(username);
       setUserRole(data.role || null);
       setUserImageUrl(data.image_url || null);
       setScreen('hub');
@@ -2032,6 +2063,9 @@ function AppContent() {
       setConfirmPassword('');
       setImageUri(null);
       setImageBase64(null);
+      
+      // Register push notification token
+      registerPushToken(username);
     } catch (err: any) {
       console.error('Auth error:', err);
       let errorMsg = err.message || 'אירעה שגיאה בחיבור לשרת. נסה שוב.';
