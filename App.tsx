@@ -20,9 +20,97 @@ import {
   View,
   Platform,
   PermissionsAndroid,
+  ActivityIndicator,
 } from 'react-native';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import Video from 'react-native-video';
+import RNFS from 'react-native-fs';
+import { WebView } from 'react-native-webview';
+
+// Helper function to upload video file and get data URI from backend
+// For videos, we upload directly as multipart/form-data to avoid memory issues
+// The backend converts it to a data URI and returns it
+const uploadVideoAndGetDataUri = async (fileUri: string, mimeType: string = 'video/mp4'): Promise<string> => {
+  try {
+    // If it's already a data URI, return it
+    if (fileUri.startsWith('data:')) {
+      return fileUri;
+    }
+    
+    // For file URIs, upload to backend using multipart/form-data
+    // Create FormData with the file
+    const formData = new FormData();
+    
+    // In React Native, we need to create a file object
+    // The file URI should work directly with fetch
+    formData.append('media', {
+      uri: fileUri,
+      type: mimeType,
+      name: `video-${Date.now()}.${mimeType.includes('mp4') ? 'mp4' : 'mov'}`,
+    } as any);
+    
+    // Upload to a temporary endpoint that converts to data URI
+    // For now, we'll use the maintenance task endpoint structure
+    // Actually, let's just return the file URI and let the upload handle it
+    // The backend can accept multipart uploads
+    
+    // For now, return file URI - we'll handle upload at the task level
+    return fileUri;
+  } catch (error) {
+    console.error('Error preparing video upload:', error);
+    return fileUri;
+  }
+};
+
+// Helper function to upload task with media using multipart/form-data when needed
+const uploadTaskWithMedia = async (
+  url: string,
+  taskData: any,
+  mediaUri?: string | null,
+  method: string = 'POST'
+): Promise<Response> => {
+  // If media is a file URI (not data URI), use multipart/form-data
+  if (mediaUri && !mediaUri.startsWith('data:') && (mediaUri.startsWith('file://') || mediaUri.includes('/'))) {
+    const formData = new FormData();
+    
+    // Add all task data as form fields
+    Object.keys(taskData).forEach(key => {
+      if (taskData[key] !== null && taskData[key] !== undefined) {
+        formData.append(key, String(taskData[key]));
+      }
+    });
+    
+    // Add media file
+    const mimeType = mediaUri.includes('.mp4') ? 'video/mp4' : 
+                     mediaUri.includes('.mov') ? 'video/quicktime' : 
+                     mediaUri.includes('.jpg') || mediaUri.includes('.jpeg') ? 'image/jpeg' :
+                     mediaUri.includes('.png') ? 'image/png' : 'video/mp4';
+    
+    formData.append('media', {
+      uri: mediaUri,
+      type: mimeType,
+      name: `media-${Date.now()}.${mimeType.includes('video') ? (mimeType.includes('mp4') ? 'mp4' : 'mov') : (mimeType.includes('png') ? 'png' : 'jpg')}`,
+    } as any);
+    
+    return fetch(url, {
+      method,
+      body: formData,
+      headers: {
+        // Don't set Content-Type - let fetch set it with boundary
+      },
+    });
+  } else {
+    // Use JSON for data URIs or when no media
+    return fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...taskData,
+        ...(mediaUri !== undefined && { imageUri: mediaUri }),
+      }),
+    });
+  }
+};
 import {
   SafeAreaProvider,
   SafeAreaView,
@@ -393,12 +481,14 @@ function AppContent() {
   const [reportsSummary, setReportsSummary] = useState<{totalRevenue: number; totalPaid: number; totalExpenses: number} | null>(null);
   const [reportsSummaryError, setReportsSummaryError] = useState<string | null>(null);
   const [maintenanceTasksReport, setMaintenanceTasksReport] = useState<any[]>([]);
+  const [isLoadingMaintenanceTasks, setIsLoadingMaintenanceTasks] = useState<boolean>(true);
   const [invoices, setInvoices] = useState<Array<{id: string; total_price?: number | null; extracted_data?: any}>>([]);
   const [employees, setEmployees] = useState<Array<{id: string; username: string; image_url?: string | null; hourly_wage?: number | null; role?: string | null}>>([]);
   const [allAttendanceLogs, setAllAttendanceLogs] = useState<any[]>([]);
   // Track previous state for notifications
   const [previousMaintenanceTasks, setPreviousMaintenanceTasks] = useState<any[]>([]);
   const [previousChatMessages, setPreviousChatMessages] = useState<Array<{id: number; sender: string; content: string; created_at: string}>>([]);
+  const [notifiedTaskIds, setNotifiedTaskIds] = useState<Set<string>>(new Set());
   const statusBarStyle = screen === 'home' ? 'light-content' : 'dark-content';
   const statusBar = <StatusBar barStyle={statusBarStyle} />;
 
@@ -1110,26 +1200,32 @@ function AppContent() {
       // Reverse to show oldest first (backend returns newest first)
       const messages = (data ?? []).reverse();
       
-      // Check for new messages (not from current user)
-      if (userName && previousChatMessages.length > 0 && messages.length > previousChatMessages.length) {
-        const previousMessageIds = new Set(previousChatMessages.map(m => m.id));
-        const newMessages = messages.filter(m => 
-          !previousMessageIds.has(m.id) && m.sender !== userName
-        );
-        
-        if (newMessages.length > 0) {
-          const latestMessage = newMessages[newMessages.length - 1];
-          showNotification(
-            `הודעה חדשה מ-${latestMessage.sender}`,
-            latestMessage.content.length > 50 
-              ? latestMessage.content.substring(0, 50) + '...' 
-              : latestMessage.content
-          );
-        }
-      }
+      // Only update if messages have actually changed (compare by IDs)
+      const currentMessageIds = chatMessages.map(m => m.id).join(',');
+      const newMessageIds = messages.map(m => m.id).join(',');
       
-      setPreviousChatMessages(messages);
-      setChatMessages(messages);
+      if (currentMessageIds !== newMessageIds) {
+        // Check for new messages (not from current user)
+        if (userName && previousChatMessages.length > 0 && messages.length > previousChatMessages.length) {
+          const previousMessageIds = new Set(previousChatMessages.map(m => m.id));
+          const newMessages = messages.filter(m => 
+            !previousMessageIds.has(m.id) && m.sender !== userName
+          );
+          
+          if (newMessages.length > 0) {
+            const latestMessage = newMessages[newMessages.length - 1];
+            showNotification(
+              `הודעה חדשה מ-${latestMessage.sender}`,
+              latestMessage.content.length > 50 
+                ? latestMessage.content.substring(0, 50) + '...' 
+                : latestMessage.content
+            );
+          }
+        }
+        
+        setPreviousChatMessages(messages);
+        setChatMessages(messages);
+      }
     } catch (err) {
       console.warn('Error loading chat messages', err);
     }
@@ -1412,38 +1508,49 @@ function AppContent() {
       const tasks = data || [];
       
       // Check for new assignments to current user
-      if (userName && previousMaintenanceTasks.length > 0) {
-        const previousTasksMap = new Map(previousMaintenanceTasks.map((t: any) => [t.id, t]));
+      if (userName) {
+        const previousTasksMap = previousMaintenanceTasks.length > 0 
+          ? new Map(previousMaintenanceTasks.map((t: any) => [t.id, t]))
+          : new Map();
         const currentUser = systemUsers.find(u => u.username === userName);
         const currentUserId = currentUser?.id?.toString();
+        const newNotifiedIds = new Set(notifiedTaskIds);
         
         tasks.forEach((t: any) => {
           const prevTask = previousTasksMap.get(t.id);
-          const currentAssignedTo = (t.assigned_to || t.assignedTo || '').toString().trim();
-          const prevAssignedTo = prevTask ? ((prevTask.assigned_to || prevTask.assignedTo || '').toString().trim()) : '';
+          const currentAssignedTo = (t.assignedTo || t.assigned_to || '').toString().trim();
+          const prevAssignedTo = prevTask ? ((prevTask.assignedTo || prevTask.assigned_to || '').toString().trim()) : '';
           
-          // Check if this task was just assigned to the current user
-          // Assignment happens when: wasn't assigned before OR was assigned to someone else, now assigned to me
-          if (currentAssignedTo && currentAssignedTo !== prevAssignedTo) {
-            // Check if assigned to current user (by username or user ID)
-            const isAssignedToMe = 
+          // Check if assigned to current user (by username or user ID)
+          const isAssignedToMe = 
+            currentAssignedTo && (
               currentAssignedTo === userName || 
-              (currentUserId && currentAssignedTo === currentUserId);
+              (currentUserId && currentAssignedTo === currentUserId)
+            );
+          
+          if (isAssignedToMe && !notifiedTaskIds.has(t.id)) {
+            // Check if this is a new assignment (task didn't exist before OR assignment changed to me)
+            const isNewAssignment = !prevTask || (prevAssignedTo !== currentAssignedTo);
             
-            if (isAssignedToMe) {
+            if (isNewAssignment) {
               showNotification(
                 'משימה חדשה הוקצתה לך',
                 `משימת תחזוקה חדשה: ${t.title || 'ללא כותרת'}`
               );
+              newNotifiedIds.add(t.id);
             }
           }
         });
+        
+        setNotifiedTaskIds(newNotifiedIds);
       }
       
       setPreviousMaintenanceTasks(tasks);
       setMaintenanceTasksReport(tasks);
+      setIsLoadingMaintenanceTasks(false);
     } catch (err) {
       console.error('Error loading maintenance tasks for reports:', err);
+      setIsLoadingMaintenanceTasks(false);
     }
   };
 
@@ -1613,6 +1720,7 @@ function AppContent() {
 
   useEffect(() => {
     if (screen === 'reports') {
+      setIsLoadingMaintenanceTasks(true);
       loadOrders();
       loadInventoryOrders();
       loadReportsSummary();
@@ -1910,7 +2018,13 @@ function AppContent() {
       setImageBase64(null);
     } catch (err: any) {
       console.error('Auth error:', err);
-      const errorMsg = err.message || 'אירעה שגיאה בחיבור לשרת. נסה שוב.';
+      let errorMsg = err.message || 'אירעה שגיאה בחיבור לשרת. נסה שוב.';
+      
+      // Provide more helpful error messages for network issues
+      if (err.message && (err.message.includes('Network request failed') || err.message.includes('network') || err.message.includes('fetch'))) {
+        errorMsg = 'שגיאת רשת: לא ניתן להתחבר לשרת. בדוק את החיבור לאינטרנט. אם אתה משתמש באמולטור, ודא שיש לו גישה לאינטרנט.';
+      }
+      
       setError(errorMsg);
     }
   };
@@ -2805,12 +2919,14 @@ function AppContent() {
         inventoryOrders={inventoryOrders}
         maintenanceUnits={maintenanceUnits}
         maintenanceTasksReport={maintenanceTasksReport}
+        isLoadingMaintenanceTasks={isLoadingMaintenanceTasks}
         resolveAssignee={resolveAssigneeLabel}
         attendanceStatus={attendanceStatus}
         attendanceLogsReport={attendanceLogsReport}
         reportsSummary={reportsSummary}
         reportsSummaryError={reportsSummaryError}
         onRefresh={() => {
+          setIsLoadingMaintenanceTasks(true);
           loadOrders();
           loadInventoryOrders();
           loadReportsSummary();
@@ -2936,8 +3052,9 @@ function AppContent() {
         unit={unit}
         systemUsers={systemUsers}
         onRefreshUsers={() => loadSystemUsers(true)}
-        onSave={async (task) => {
+        onSave={async (task, setIsSaving) => {
           try {
+            if (setIsSaving) setIsSaving(true);
             // Always send as JSON with imageUri field (works for both images and videos)
             // For videos, the URI will be a file URI, for images it will be a data URI
             const jsonPayload: any = {
@@ -2949,15 +3066,19 @@ function AppContent() {
               created_date: task.createdDate,
             };
             if (task.assignedTo) jsonPayload.assigned_to = task.assignedTo;
+            
+            // Media is already uploaded to storage when selected (like PWA), just use the URI
             if (task.media?.uri) {
               jsonPayload.imageUri = task.media.uri;
             }
             
+            // Upload task with media URL/data URI
             const jsonRes = await fetch(`${API_BASE_URL}/api/maintenance/tasks`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(jsonPayload),
             });
+            
             if (!jsonRes.ok) {
               const errText = await jsonRes.text().catch(() => '');
               let errorDetail = errText || `HTTP ${jsonRes.status}`;
@@ -2979,6 +3100,8 @@ function AppContent() {
             } else {
               Alert.alert('שגיאה', errorMessage);
             }
+          } finally {
+            if (setIsSaving) setIsSaving(false);
           }
         }}
         onCancel={() => setScreen('maintenanceTasks')}
@@ -3881,6 +4004,7 @@ type OptionCardProps = {
   details: string[];
   cta?: string;
   onPress?: () => void;
+  isLoading?: boolean;
 };
 
 type ExitInspectionsProps = {
@@ -5792,6 +5916,7 @@ type ReportsScreenProps = {
   inventoryOrders: InventoryOrder[];
   maintenanceUnits: MaintenanceUnit[];
   maintenanceTasksReport: Array<any>;
+  isLoadingMaintenanceTasks: boolean;
   resolveAssignee: (assignedTo?: string | null) => string;
   attendanceStatus: {is_clocked_in: boolean; session: any} | null;
   attendanceLogsReport: Array<any>;
@@ -5816,6 +5941,7 @@ function ReportsScreen({
   inventoryOrders,
   maintenanceUnits,
   maintenanceTasksReport,
+  isLoadingMaintenanceTasks,
   resolveAssignee,
   attendanceStatus,
   attendanceLogsReport,
@@ -6693,6 +6819,7 @@ function ReportsScreen({
                 ]}
                 cta="פתח דוח מלא"
                 onPress={() => openReport('maintenance')}
+                isLoading={isLoadingMaintenanceTasks}
               />
               <OptionCard
                 title="דוח נוכחות"
@@ -7968,7 +8095,7 @@ function AttendanceScreen({
 
 type NewMaintenanceTaskScreenProps = {
   unit: MaintenanceUnit;
-  onSave: (task: MaintenanceTask) => void;
+  onSave: (task: MaintenanceTask, setIsSaving?: (loading: boolean) => void) => void | Promise<void>;
   systemUsers: SystemUser[];
   onRefreshUsers: () => void;
   onCancel: () => void;
@@ -8186,6 +8313,64 @@ function MaintenanceTaskDetailScreen({
   const [showEditMediaModal, setShowEditMediaModal] = useState(false);
   const [editMediaUri, setEditMediaUri] = useState<string | undefined>(undefined);
   const [hasNewMedia, setHasNewMedia] = useState(false);
+  const [isUploadingClose, setIsUploadingClose] = useState(false);
+  const [isUploadingEdit, setIsUploadingEdit] = useState(false);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [useWebViewForVideo, setUseWebViewForVideo] = useState(false);
+
+  // Reset WebView fallback when task changes
+  useEffect(() => {
+    setUseWebViewForVideo(false);
+    setVideoError(null);
+  }, [task.id, task.imageUri]);
+
+  // Helper function to upload file to storage (like PWA)
+  const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
+    // In React Native, FormData with file:// URIs doesn't work reliably
+    // Skip directly to base64 conversion (backend will convert to storage)
+    if (fileUri.startsWith('file://')) {
+      try {
+        const filePath = fileUri.replace('file://', '');
+        const base64Data = await RNFS.readFile(filePath, 'base64');
+        return `data:${mimeType};base64,${base64Data}`;
+      } catch (err: any) {
+        console.error('Error reading file for base64 conversion:', err);
+        throw new Error(`Failed to read file: ${err.message}`);
+      }
+    }
+    
+    // For non-file:// URIs (e.g., data URIs or HTTP URLs), try direct upload
+    try {
+      const formData = new FormData();
+      formData.append('file', {
+        uri: fileUri,
+        type: mimeType,
+        name: fileName || `media-${Date.now()}.${mimeType.includes('video') ? 'mp4' : 'jpg'}`,
+      } as any);
+      
+      const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`Storage upload failed: ${errText}`);
+      }
+      
+      const data = await res.json();
+      return data.url;
+    } catch (err: any) {
+      // If direct upload fails and it's not a file:// URI, try base64 as fallback
+      if (fileUri.startsWith('data:')) {
+        // Already a data URI, return as-is
+        return fileUri;
+      }
+      console.warn('Direct upload failed, using data URI fallback');
+      // For other cases, try to convert to base64 if possible
+      throw new Error(`Upload failed: ${err.message}`);
+    }
+  };
 
   const handleOpenCloseModal = () => {
     setCloseModalImageUri(undefined);
@@ -8201,13 +8386,18 @@ function MaintenanceTaskDetailScreen({
           text: 'תמונה',
           onPress: async () => {
             try {
+              setIsUploadingClose(true);
               const result = await launchCamera({
                 mediaType: 'photo',
                 includeBase64: true,
               });
-              if (result.didCancel) return;
+              if (result.didCancel) {
+                setIsUploadingClose(false);
+                return;
+              }
               const asset = result.assets?.[0];
               if (!asset?.uri) {
+                setIsUploadingClose(false);
                 Alert.alert('שגיאה', 'לא נבחר קובץ');
                 return;
               }
@@ -8217,11 +8407,13 @@ function MaintenanceTaskDetailScreen({
                 : asset.uri;
               setCloseModalImageUri(uri);
               // Automatically close the task when media is uploaded
-              onUpdateTask(task.id, { status: 'סגור', imageUri: uri });
+              await onUpdateTask(task.id, { status: 'סגור', imageUri: uri });
               Alert.alert('הצלחה', 'המשימה נסגרה בהצלחה');
               setShowCloseModal(false);
+              setIsUploadingClose(false);
               onBack();
             } catch (err: any) {
+              setIsUploadingClose(false);
               console.error('Error selecting media:', err);
               Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם תמונה');
             }
@@ -8231,23 +8423,53 @@ function MaintenanceTaskDetailScreen({
           text: 'וידאו',
           onPress: async () => {
             try {
+              setIsUploadingClose(true);
               const result = await launchCamera({
                 mediaType: 'video',
                 videoQuality: 'high',
               });
-              if (result.didCancel) return;
+              if (result.didCancel) {
+                setIsUploadingClose(false);
+                return;
+              }
               const asset = result.assets?.[0];
               if (!asset?.uri) {
+                setIsUploadingClose(false);
                 Alert.alert('שגיאה', 'לא נבחר קובץ');
                 return;
               }
               const mime = asset.type || 'video/mp4';
-              // Automatically close the task when media is uploaded
-              onUpdateTask(task.id, { status: 'סגור', imageUri: asset.uri });
-              Alert.alert('הצלחה', 'המשימה נסגרה בהצלחה');
-              setShowCloseModal(false);
-              onBack();
+              // Upload to storage first (like PWA), then update task
+              try {
+                // Upload file to storage
+                const mediaUrl = await uploadFileToStorage(asset.uri, mime, asset.fileName);
+                
+                // Update task with storage URL or data URI
+                const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks/${encodeURIComponent(task.id)}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    status: 'סגור',
+                    image_uri: mediaUrl,
+                  }),
+                });
+                
+                if (!res.ok) {
+                  throw new Error(`HTTP ${res.status}`);
+                }
+                
+                await loadMaintenanceUnits();
+                Alert.alert('הצלחה', 'המשימה נסגרה בהצלחה');
+                setShowCloseModal(false);
+                setIsUploadingClose(false);
+                onBack();
+              } catch (err: any) {
+                setIsUploadingClose(false);
+                console.error('Error uploading video:', err);
+                Alert.alert('שגיאה', err?.message || 'לא ניתן להעלות את הוידאו');
+              }
             } catch (err: any) {
+              setIsUploadingClose(false);
               console.error('Error selecting media:', err);
               Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם וידאו');
             }
@@ -8308,8 +8530,16 @@ function MaintenanceTaskDetailScreen({
                 return;
               }
               const mime = asset.type || 'video/mp4';
-              setEditMediaUri(asset.uri);
-              setHasNewMedia(true); // Mark that new media was selected
+              // Upload to storage first (like PWA), then set the URL for preview
+              try {
+                // Upload file to storage
+                const mediaUrl = await uploadFileToStorage(asset.uri, mime, asset.fileName);
+                setEditMediaUri(mediaUrl);
+                setHasNewMedia(true);
+              } catch (err: any) {
+                console.error('Error uploading video:', err);
+                Alert.alert('שגיאה', 'לא ניתן להעלות את הוידאו. נסה שוב.');
+              }
             } catch (err: any) {
               console.error('Error selecting media:', err);
               Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם וידאו');
@@ -8327,14 +8557,26 @@ function MaintenanceTaskDetailScreen({
 
   const handleSaveEditMedia = async () => {
     try {
+      setIsUploadingEdit(true);
       // If editMediaUri is null/undefined, remove the media by sending null
-      // Otherwise, update with new media
-      const imageUriToSave = editMediaUri === null || editMediaUri === undefined ? null : editMediaUri;
-      await onUpdateTask(task.id, { imageUri: imageUriToSave });
-      Alert.alert('הצלחה', imageUriToSave ? 'המדיה עודכנה בהצלחה' : 'המדיה הוסרה בהצלחה');
+      if (editMediaUri === null || editMediaUri === undefined) {
+        await onUpdateTask(task.id, { imageUri: null });
+        Alert.alert('הצלחה', 'המדיה הוסרה בהצלחה');
+        setShowEditMediaModal(false);
+        setHasNewMedia(false);
+        setIsUploadingEdit(false);
+        return;
+      }
+      
+      // Videos are now converted to data URIs when selected, so we can always use JSON
+      // For data URIs (images and videos), use the regular update
+      await onUpdateTask(task.id, { imageUri: editMediaUri });
+      Alert.alert('הצלחה', 'המדיה עודכנה בהצלחה');
       setShowEditMediaModal(false);
-      setHasNewMedia(false); // Reset flag after saving
+      setHasNewMedia(false);
+      setIsUploadingEdit(false);
     } catch (err: any) {
+      setIsUploadingEdit(false);
       Alert.alert('שגיאה', err.message || 'לא ניתן לעדכן את המדיה');
     }
   };
@@ -8423,7 +8665,7 @@ function MaintenanceTaskDetailScreen({
             <View style={styles.taskDetailSection}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <Text style={styles.taskDetailLabel}>
-                  {task.imageUri.startsWith('data:video/') || task.imageUri.includes('.mp4') || task.imageUri.includes('.mov') 
+                  {task.imageUri.startsWith('data:video/') || task.imageUri.includes('.mp4') || task.imageUri.includes('.mov') || task.imageUri.includes('/vidoes/') || task.imageUri.includes('/storage/')
                     ? 'וידאו:' 
                     : 'תמונה:'}
                 </Text>
@@ -8439,18 +8681,117 @@ function MaintenanceTaskDetailScreen({
                 </Pressable>
               </View>
               <View style={styles.taskImageContainer}>
-                {task.imageUri.startsWith('data:video/') || task.imageUri.includes('.mp4') || task.imageUri.includes('.mov') ? (
-                  <Video
-                    source={{ uri: task.imageUri }}
-                    style={styles.taskDetailImage}
-                    controls
-                    resizeMode="contain"
-                    paused={true}
-                    onError={(error) => {
-                      console.error('Video playback error:', error);
-                      Alert.alert('שגיאה', 'לא ניתן לנגן את הוידאו. נסה שוב או החלף את הקובץ.');
-                    }}
-                  />
+                {task.imageUri.startsWith('data:video/') || task.imageUri.includes('.mp4') || task.imageUri.includes('.mov') || task.imageUri.includes('/storage/') || task.imageUri.includes('/vidoes/') ? (
+                  // For HTTP URLs (storage), use react-native-video directly
+                  task.imageUri.startsWith('http') ? (
+                    <Video
+                      source={{ uri: task.imageUri }}
+                      style={styles.taskDetailImage}
+                      controls
+                      resizeMode="contain"
+                      paused={false}
+                      onError={(error) => {
+                        console.error('Video playback error:', error);
+                        setVideoError('לא ניתן לנגן את הוידאו');
+                      }}
+                      onLoad={() => {
+                        setVideoError(null);
+                        console.log('Video loaded successfully from storage');
+                      }}
+                      onLoadStart={() => {
+                        setVideoError(null);
+                        console.log('Video loading started');
+                      }}
+                    />
+                  ) : task.imageUri.startsWith('data:') && !useWebViewForVideo ? (
+                    // For data URIs, try react-native-video first, fallback to WebView if it fails
+                    <Video
+                      source={{ 
+                        uri: task.imageUri,
+                        type: 'mp4',
+                      }}
+                      style={styles.taskDetailImage}
+                      controls
+                      resizeMode="contain"
+                      paused={false}
+                      onError={(error) => {
+                        console.error('Video playback error with react-native-video, switching to WebView:', error);
+                        setUseWebViewForVideo(true);
+                      }}
+                      onLoad={() => {
+                        setVideoError(null);
+                        console.log('Video loaded successfully with react-native-video');
+                      }}
+                      onLoadStart={() => {
+                        setVideoError(null);
+                        console.log('Video loading started');
+                      }}
+                    />
+                  ) : task.imageUri.startsWith('data:') && useWebViewForVideo ? (
+                    // Fallback to WebView if react-native-video fails
+                    <WebView
+                      source={{ html: `
+                        <!DOCTYPE html>
+                        <html>
+                          <head>
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+                            <style>
+                              * { margin: 0; padding: 0; box-sizing: border-box; }
+                              html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+                              body { display: flex; justify-content: center; align-items: center; }
+                              video { 
+                                max-width: 100%; 
+                                max-height: 100%; 
+                                width: auto;
+                                height: auto;
+                                object-fit: contain;
+                              }
+                            </style>
+                          </head>
+                          <body>
+                            <video controls autoplay playsinline>
+                              <source src="${task.imageUri.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" type="video/mp4">
+                            </video>
+                          </body>
+                        </html>
+                      ` }}
+                      style={styles.taskDetailImage}
+                      javaScriptEnabled={true}
+                      domStorageEnabled={true}
+                      allowsInlineMediaPlayback={true}
+                      mediaPlaybackRequiresUserAction={false}
+                      onError={(syntheticEvent) => {
+                        const { nativeEvent } = syntheticEvent;
+                        console.error('WebView error:', nativeEvent);
+                        setVideoError('שגיאה בטעינת הוידאו');
+                      }}
+                      onLoadEnd={() => {
+                        console.log('WebView loaded');
+                        setVideoError(null);
+                      }}
+                    />
+                  ) : (
+                    // Use react-native-video for HTTP URLs and file URIs
+                    <Video
+                      source={{ uri: task.imageUri }}
+                      style={styles.taskDetailImage}
+                      controls
+                      resizeMode="contain"
+                      paused={false}
+                      onError={(error) => {
+                        console.error('Video playback error:', error);
+                        setVideoError('לא ניתן לנגן את הוידאו');
+                      }}
+                      onLoad={() => {
+                        setVideoError(null);
+                        console.log('Video loaded successfully');
+                      }}
+                      onLoadStart={() => {
+                        setVideoError(null);
+                        console.log('Video loading started');
+                      }}
+                    />
+                  )
                 ) : (
                   <Image
                     source={{ uri: task.imageUri }}
@@ -8522,13 +8863,22 @@ function MaintenanceTaskDetailScreen({
               {closeModalImageUri ? (
                 <View style={styles.closeModalImageContainer}>
                   <View style={styles.taskImagePreviewContainer}>
-                    {closeModalImageUri.startsWith('data:video/') || closeModalImageUri.includes('.mp4') || closeModalImageUri.includes('.mov') ? (
+                    {closeModalImageUri.startsWith('data:video/') || closeModalImageUri.includes('.mp4') || closeModalImageUri.includes('.mov') || closeModalImageUri.includes('/vidoes/') || closeModalImageUri.includes('/storage/') ? (
                       <Video
-                        source={{ uri: closeModalImageUri }}
+                        source={{ 
+                          uri: closeModalImageUri,
+                          type: closeModalImageUri.startsWith('data:') ? 'mp4' : undefined,
+                        }}
                         style={styles.taskImagePreview}
                         controls
                         resizeMode="contain"
                         paused={false}
+                        onError={(error) => {
+                          console.error('Video playback error in close modal:', error);
+                        }}
+                        onLoad={() => {
+                          console.log('Close modal video loaded');
+                        }}
                       />
                     ) : (
                       <Image
@@ -8564,8 +8914,13 @@ function MaintenanceTaskDetailScreen({
                   <Pressable
                     onPress={handleCloseModalImageSelect}
                     style={styles.uploadImageButton}
+                    disabled={isUploadingClose}
                   >
-                    <Text style={styles.uploadImageButtonText}>+ העלה תמונה/וידאו</Text>
+                    {isUploadingClose ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.uploadImageButtonText}>+ העלה תמונה/וידאו</Text>
+                    )}
                   </Pressable>
                 </View>
               )}
@@ -8593,14 +8948,63 @@ function MaintenanceTaskDetailScreen({
               {editMediaUri ? (
                 <View style={styles.closeModalImageContainer}>
                   <View style={styles.taskImagePreviewContainer}>
-                    {editMediaUri.startsWith('data:video/') || editMediaUri.includes('.mp4') || editMediaUri.includes('.mov') ? (
-                      <Video
-                        source={{ uri: editMediaUri }}
-                        style={styles.taskImagePreview}
-                        controls
-                        resizeMode="contain"
-                        paused={true}
-                      />
+                    {editMediaUri.startsWith('data:video/') || editMediaUri.includes('.mp4') || editMediaUri.includes('.mov') || editMediaUri.includes('/vidoes/') || editMediaUri.includes('/storage/') ? (
+                      editMediaUri.startsWith('http') ? (
+                        // HTTP URLs (storage) - use react-native-video
+                        <Video
+                          source={{ uri: editMediaUri }}
+                          style={styles.taskImagePreview}
+                          controls
+                          resizeMode="contain"
+                          paused={false}
+                          onError={(error) => {
+                            console.error('Video playback error:', error);
+                          }}
+                          onLoad={() => {
+                            console.log('Edit video loaded successfully from storage');
+                          }}
+                        />
+                      ) : editMediaUri.startsWith('data:') ? (
+                        // Data URIs - use WebView
+                        <WebView
+                          source={{ html: `
+                            <!DOCTYPE html>
+                            <html>
+                              <head>
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                <style>
+                                  body { margin: 0; padding: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
+                                  video { max-width: 100%; max-height: 100%; }
+                                </style>
+                              </head>
+                              <body>
+                                <video controls autoplay>
+                                  <source src="${editMediaUri.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" type="video/mp4">
+                                  Your browser does not support the video tag.
+                                </video>
+                              </body>
+                            </html>
+                          ` }}
+                          style={styles.taskImagePreview}
+                          javaScriptEnabled={true}
+                          domStorageEnabled={true}
+                        />
+                      ) : (
+                        // File URIs - use react-native-video
+                        <Video
+                          source={{ uri: editMediaUri }}
+                          style={styles.taskImagePreview}
+                          controls
+                          resizeMode="contain"
+                          paused={false}
+                          onError={(error) => {
+                            console.error('Video playback error:', error);
+                          }}
+                          onLoad={() => {
+                            console.log('Edit video loaded successfully');
+                          }}
+                        />
+                      )
                     ) : (
                       <Image
                         source={{ uri: editMediaUri }}
@@ -8622,8 +9026,13 @@ function MaintenanceTaskDetailScreen({
                 <Pressable
                   onPress={handleEditMediaSelect}
                   style={styles.uploadImageButton}
+                  disabled={isUploadingEdit}
                 >
-                  <Text style={styles.uploadImageButtonText}>+ העלה תמונה/וידאו</Text>
+                  {isUploadingEdit ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.uploadImageButtonText}>+ העלה תמונה/וידאו</Text>
+                  )}
                 </Pressable>
               )}
             </View>
@@ -8634,8 +9043,13 @@ function MaintenanceTaskDetailScreen({
                   <Pressable
                     onPress={handleSaveEditMedia}
                     style={[styles.modalButton, styles.modalButtonPrimary, { flex: 1 }]}
+                    disabled={isUploadingEdit}
                   >
-                    <Text style={styles.modalButtonText}>אישור</Text>
+                    {isUploadingEdit ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.modalButtonText}>אישור</Text>
+                    )}
                   </Pressable>
                   <Pressable
                     onPress={() => {
@@ -8681,6 +9095,9 @@ function NewMaintenanceTaskScreen({
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [showAssigneeModal, setShowAssigneeModal] = useState(false);
   const [media, setMedia] = useState<SelectedMedia | null>(null);
+  const [mediaUri, setMediaUri] = useState<string | undefined>(undefined);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isUploadingMedia, setIsUploadingMedia] = useState(false);
 
   useEffect(() => {
     // Default assignee: current user (if we can resolve them from system users list)
@@ -8689,6 +9106,64 @@ function NewMaintenanceTaskScreen({
       if (found?.id) setAssignedTo(found.id.toString());
     }
   }, [assignedTo, userName, systemUsers]);
+
+  const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
+    // In React Native, FormData with file:// URIs doesn't work reliably
+    // Skip directly to base64 conversion (backend will convert to storage)
+    if (fileUri.startsWith('file://')) {
+      try {
+        const filePath = fileUri.replace('file://', '');
+        // Use Promise with setTimeout to allow UI to update during long operations
+        return new Promise((resolve, reject) => {
+          // Small delay to allow UI to render loading state before blocking operation
+          setTimeout(async () => {
+            try {
+              const base64Data = await RNFS.readFile(filePath, 'base64');
+              resolve(`data:${mimeType};base64,${base64Data}`);
+            } catch (err: any) {
+              console.error('Error reading file for base64 conversion:', err);
+              reject(new Error(`Failed to read file: ${err.message}`));
+            }
+          }, 50);
+        });
+      } catch (err: any) {
+        console.error('Error reading file for base64 conversion:', err);
+        throw new Error(`Failed to read file: ${err.message}`);
+      }
+    }
+    
+    // For non-file:// URIs (e.g., data URIs or HTTP URLs), try direct upload
+    try {
+      const formData = new FormData();
+      formData.append('file', {
+        uri: fileUri,
+        type: mimeType,
+        name: fileName || `media-${Date.now()}.${mimeType.includes('video') ? 'mp4' : 'jpg'}`,
+      } as any);
+      
+      const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`Storage upload failed: ${errText}`);
+      }
+      
+      const data = await res.json();
+      return data.url;
+    } catch (err: any) {
+      // If direct upload fails and it's not a file:// URI, try base64 as fallback
+      if (fileUri.startsWith('data:')) {
+        // Already a data URI, return as-is
+        return fileUri;
+      }
+      console.warn('Direct upload failed, using data URI fallback');
+      // For other cases, try to convert to base64 if possible
+      throw new Error(`Upload failed: ${err.message}`);
+    }
+  };
 
   const handlePickMedia = async () => {
     Alert.alert(
@@ -8699,23 +9174,39 @@ function NewMaintenanceTaskScreen({
           text: 'תמונה',
           onPress: async () => {
             try {
+              setIsUploadingMedia(true);
               const result = await launchCamera({
                 mediaType: 'photo',
                 includeBase64: true,
               });
-              if (result.didCancel) return;
+              if (result.didCancel) {
+                setIsUploadingMedia(false);
+                return;
+              }
               const asset = result.assets?.[0];
               if (!asset?.uri) {
                 Alert.alert('שגיאה', 'לא נבחר קובץ');
+                setIsUploadingMedia(false);
                 return;
               }
               const mime = asset.type || 'image/jpeg';
               const name = asset.fileName || `media-${Date.now()}`;
-              const uri = asset.base64 
-                ? `data:${mime};base64,${asset.base64}` 
-                : asset.uri;
-              setMedia({ uri, type: mime, name });
+              
+              // Upload to storage immediately (like PWA)
+              let finalUri: string;
+              if (asset.base64) {
+                // If base64 is available, use it directly (backend will convert to storage)
+                finalUri = `data:${mime};base64,${asset.base64}`;
+              } else {
+                // Upload file:// URI to storage
+                finalUri = await uploadFileToStorage(asset.uri, mime, name);
+              }
+              
+              setMedia({ uri: asset.uri, type: mime, name });
+              setMediaUri(finalUri);
+              setIsUploadingMedia(false);
             } catch (err: any) {
+              setIsUploadingMedia(false);
               Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם תמונה');
             }
           },
@@ -8728,7 +9219,9 @@ function NewMaintenanceTaskScreen({
                 mediaType: 'video',
                 videoQuality: 'high',
               });
-              if (result.didCancel) return;
+              if (result.didCancel) {
+                return;
+              }
               const asset = result.assets?.[0];
               if (!asset?.uri) {
                 Alert.alert('שגיאה', 'לא נבחר קובץ');
@@ -8736,8 +9229,25 @@ function NewMaintenanceTaskScreen({
               }
               const mime = asset.type || 'video/mp4';
               const name = asset.fileName || `media-${Date.now()}`;
+              
+              // Set media immediately for preview, then upload in background
               setMedia({ uri: asset.uri, type: mime, name });
+              
+              // Upload to storage in background (like PWA)
+              setIsUploadingMedia(true);
+              try {
+                const finalUri = await uploadFileToStorage(asset.uri, mime, name);
+                setMediaUri(finalUri);
+              } catch (uploadErr: any) {
+                console.error('Error uploading video:', uploadErr);
+                // Fallback: use file URI directly (backend will handle it)
+                setMediaUri(asset.uri);
+                Alert.alert('אזהרה', 'העלאת הוידאו נכשלה, אך המשימה תישמר עם הקובץ המקומי');
+              } finally {
+                setIsUploadingMedia(false);
+              }
             } catch (err: any) {
+              setIsUploadingMedia(false);
               Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם וידאו');
             }
           },
@@ -8751,7 +9261,7 @@ function NewMaintenanceTaskScreen({
     );
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!title || !description) {
       Alert.alert('שגיאה', 'אנא מלאו את כל השדות הנדרשים');
       return;
@@ -8769,10 +9279,10 @@ function NewMaintenanceTaskScreen({
       status: 'פתוח',
       createdDate: new Date().toISOString().split('T')[0],
       assignedTo,
-      media,
+      media: mediaUri ? { uri: mediaUri, type: media?.type || 'image/jpeg', name: media?.name } : null,
     };
 
-    onSave(newTask);
+    await onSave(newTask, setIsSaving);
   };
 
   return (
@@ -8840,24 +9350,55 @@ function NewMaintenanceTaskScreen({
 
           <View style={styles.field}>
             <Text style={styles.label}>תמונה/וידאו</Text>
-            {media ? (
+            {mediaUri ? (
               <View style={styles.closeModalImageContainer}>
                 <View style={styles.taskImagePreviewContainer}>
-                  {media.type?.startsWith('video/') || media.uri.includes('.mp4') || media.uri.includes('.mov') ? (
-                    <Video
-                      source={{ uri: media.uri }}
-                      style={styles.taskImagePreview}
-                      controls
-                      resizeMode="contain"
-                      paused={true}
-                      onError={(error) => {
-                        console.error('Video playback error:', error);
-                        Alert.alert('שגיאה', 'לא ניתן לנגן את הוידאו. נסה שוב או החלף את הקובץ.');
-                      }}
-                    />
+                  {mediaUri.includes('.mp4') || mediaUri.includes('.mov') || mediaUri.includes('/vidoes/') || mediaUri.includes('/storage/') || (media?.type?.startsWith('video/')) ? (
+                    mediaUri.startsWith('http') ? (
+                      // HTTP URLs (storage) - use react-native-video
+                      <Video
+                        source={{ uri: mediaUri }}
+                        style={styles.taskImagePreview}
+                        controls
+                        resizeMode="contain"
+                        paused={false}
+                        onError={(error) => {
+                          console.error('Video playback error:', error);
+                          Alert.alert('שגיאה', 'לא ניתן לנגן את הוידאו. נסה שוב או החלף את הקובץ.');
+                        }}
+                        onLoad={() => {
+                          console.log('New task video loaded successfully from storage');
+                        }}
+                      />
+                    ) : mediaUri.startsWith('data:') ? (
+                      // Data URIs - use WebView
+                      <WebView
+                        source={{ html: `
+                          <!DOCTYPE html>
+                          <html>
+                            <head>
+                              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                              <style>
+                                body { margin: 0; padding: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
+                                video { max-width: 100%; max-height: 100%; }
+                              </style>
+                            </head>
+                            <body>
+                              <video controls autoplay>
+                                <source src="${mediaUri.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" type="video/mp4">
+                                Your browser does not support the video tag.
+                              </video>
+                            </body>
+                          </html>
+                        ` }}
+                        style={styles.taskImagePreview}
+                        javaScriptEnabled={true}
+                        domStorageEnabled={true}
+                      />
+                    ) : null
                   ) : (
                     <Image
-                      source={{ uri: media.uri }}
+                      source={{ uri: mediaUri }}
                       style={styles.taskImagePreview}
                       resizeMode="contain"
                       onError={() => {
@@ -8867,21 +9408,33 @@ function NewMaintenanceTaskScreen({
                   )}
                 </View>
                 <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
-                  <Pressable onPress={handlePickMedia} style={styles.changeImageButton}>
+                  <Pressable onPress={handlePickMedia} style={styles.changeImageButton} disabled={isUploadingMedia}>
                     <Text style={styles.changeImageButtonText}>החלף</Text>
                   </Pressable>
                 </View>
               </View>
             ) : (
-              <Pressable onPress={handlePickMedia} style={styles.uploadImageButton}>
-                <Text style={styles.uploadImageButtonText}>+ העלה תמונה/וידאו</Text>
+              <Pressable 
+                onPress={handlePickMedia} 
+                style={[styles.uploadImageButton, { opacity: isUploadingMedia ? 0.6 : 1 }]}
+                disabled={isUploadingMedia}
+              >
+                {isUploadingMedia ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.uploadImageButtonText}>+ העלה תמונה/וידאו</Text>
+                )}
               </Pressable>
             )}
           </View>
 
           <View style={styles.editActions}>
-            <Pressable onPress={handleSave} style={styles.saveOrderButton}>
-              <Text style={styles.saveOrderButtonText}>צור משימה</Text>
+            <Pressable onPress={handleSave} style={styles.saveOrderButton} disabled={isSaving}>
+              {isSaving ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.saveOrderButtonText}>צור משימה</Text>
+              )}
             </Pressable>
             <Pressable onPress={onCancel} style={styles.cancelOrderButton}>
               <Text style={styles.cancelOrderButtonText}>ביטול</Text>
@@ -8889,6 +9442,25 @@ function NewMaintenanceTaskScreen({
           </View>
         </View>
       </ScrollView>
+
+      {/* Loading Modal for Video Upload */}
+      <Modal
+        visible={isUploadingMedia}
+        transparent
+        animationType="fade"
+      >
+        <View style={[styles.modalOverlay, { justifyContent: 'center', alignItems: 'center' }]}>
+          <View style={[styles.modalCard, { padding: 30, minWidth: 200, alignItems: 'center' }]}>
+            <ActivityIndicator size="large" color="#3b82f6" />
+            <Text style={[styles.modalTitle, { marginTop: 20, textAlign: 'center' }]}>
+              מעלה וידאו...
+            </Text>
+            <Text style={[styles.progressNote, { marginTop: 10, textAlign: 'center' }]}>
+              אנא המתן, זה עשוי לקחת כמה רגעים
+            </Text>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={showAssigneeModal}
@@ -9887,6 +10459,7 @@ function OptionCard({
   details,
   cta,
   onPress,
+  isLoading = false,
 }: OptionCardProps) {
   return (
     <Pressable
@@ -9903,11 +10476,17 @@ function OptionCard({
       </View>
       <Text style={styles.optionTitle}>{title}</Text>
       <View style={styles.optionBullets}>
-        {details.map(line => (
-          <Text key={line} style={styles.optionBullet}>
-            • {line}
-          </Text>
-        ))}
+        {isLoading ? (
+          <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 12 }}>
+            <ActivityIndicator color={accent} size="small" />
+          </View>
+        ) : (
+          details.map(line => (
+            <Text key={line} style={styles.optionBullet}>
+              • {line}
+            </Text>
+          ))
+        )}
       </View>
       {cta ? (
         <View style={[styles.optionCta, { backgroundColor: accent + '22' }]}>
@@ -12363,12 +12942,14 @@ const styles = StyleSheet.create({
   chatContainer: {
     flex: 1,
     backgroundColor: '#f8fafc',
+    flexDirection: 'column',
   },
   chatMessagesList: {
     flex: 1,
   },
   chatMessagesContent: {
     padding: 16,
+    paddingBottom: 20,
     gap: 12,
   },
   chatEmptyState: {
@@ -12441,11 +13022,18 @@ const styles = StyleSheet.create({
   chatInputContainer: {
     flexDirection: 'row-reverse',
     padding: 12,
+    paddingBottom: 12,
     backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#e2e8f0',
     alignItems: 'flex-end',
     gap: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 5,
+    flexShrink: 0,
   },
   chatInput: {
     flex: 1,
@@ -13157,7 +13745,7 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 16,
-    color: '#64748b',
+    color: '#000000',
     textAlign: 'center',
     paddingVertical: 20,
   },

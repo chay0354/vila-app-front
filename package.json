@@ -20,9 +20,11 @@
     "react-native": "0.83.0",
     "react-native-config": "^1.6.1",
     "react-native-dotenv": "^3.4.11",
+    "react-native-fs": "^2.20.0",
     "react-native-image-picker": "^8.2.1",
     "react-native-safe-area-context": "^5.5.2",
-    "react-native-video": "^6.18.0"
+    "react-native-video": "^6.18.0",
+    "react-native-webview": "^13.16.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
