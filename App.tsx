@@ -449,7 +449,8 @@ function AppContent() {
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [role, setRole] = useState<'עובד תחזוקה' | 'מנהל'>('עובד תחזוקה');
+  const [role, setRole] = useState<'עובד תחזוקה' | 'עובד שעתי' | 'מנהל ראשי' | 'מנהל הזמנות' | 'מנהל מתחם'>('עובד תחזוקה');
+  const [showRoleDropdown, setShowRoleDropdown] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -473,6 +474,7 @@ function AppContent() {
   const [selectedUnit, setSelectedUnit] = useState<string>('כל המתחמים');
   const [selectedOrderUnit, setSelectedOrderUnit] = useState<string | null>(null);
   const [maintenanceUnits, setMaintenanceUnits] = useState<MaintenanceUnit[]>(initialMaintenanceUnits);
+  const [isLoadingMaintenanceUnits, setIsLoadingMaintenanceUnits] = useState<boolean>(true);
   const [selectedMaintenanceUnitId, setSelectedMaintenanceUnitId] = useState<string | null>(null);
   const [selectedMaintenanceTaskId, setSelectedMaintenanceTaskId] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<Array<{id: number; sender: string; content: string; created_at: string}>>([]);
@@ -1528,16 +1530,18 @@ function AppContent() {
               (currentUserId && currentAssignedTo === currentUserId)
             );
           
-          if (isAssignedToMe && !notifiedTaskIds.has(t.id)) {
+          // Check both the original set and the new set to prevent duplicates in the same polling cycle
+          if (isAssignedToMe && !notifiedTaskIds.has(t.id) && !newNotifiedIds.has(t.id)) {
             // Check if this is a new assignment (task didn't exist before OR assignment changed to me)
             const isNewAssignment = !prevTask || (prevAssignedTo !== currentAssignedTo);
             
             if (isNewAssignment) {
+              // Add to notified set immediately to prevent duplicate notifications
+              newNotifiedIds.add(t.id);
               showNotification(
                 'משימה חדשה הוקצתה לך',
                 `משימת תחזוקה חדשה: ${t.title || 'ללא כותרת'}`
               );
-              newNotifiedIds.add(t.id);
             }
           }
         });
@@ -1556,8 +1560,17 @@ function AppContent() {
 
   const loadMaintenanceUnits = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks`);
-      if (!res.ok) return;
+      setIsLoadingMaintenanceUnits(true);
+      // Set a minimum loading time for better UX (300ms)
+      const loadingPromise = new Promise(resolve => setTimeout(resolve, 300));
+      
+      const fetchPromise = fetch(`${API_BASE_URL}/api/maintenance/tasks`);
+      
+      const [res] = await Promise.all([fetchPromise, loadingPromise]);
+      if (!res.ok) {
+        setIsLoadingMaintenanceUnits(false);
+        return;
+      }
       const data = (await res.json()) || [];
 
       // Keep the 10 units always visible, and attach tasks by unit_id
@@ -1598,8 +1611,10 @@ function AppContent() {
 
       setMaintenanceUnits(baseUnits);
       setMaintenanceTasksReport(data || []);
+      setIsLoadingMaintenanceUnits(false);
     } catch (err) {
       console.error('Error loading maintenance units:', err);
+      setIsLoadingMaintenanceUnits(false);
     }
   };
 
@@ -1747,6 +1762,7 @@ function AppContent() {
       loadInventoryOrders();
     }
     if (screen === 'maintenance' || screen === 'maintenanceTasks' || screen === 'maintenanceTaskDetail') {
+      setIsLoadingMaintenanceUnits(true);
       loadMaintenanceUnits();
     }
   }, [screen]);
@@ -2207,24 +2223,39 @@ function AppContent() {
                 </View>
                 <View style={styles.field}>
                   <Text style={styles.label}>תפקיד</Text>
-                  <View style={styles.pickerContainer}>
-                    <Pressable
-                      style={[styles.pickerButton, role === 'עובד תחזוקה' && styles.pickerButtonSelected]}
-                      onPress={() => setRole('עובד תחזוקה')}
-                    >
-                      <Text style={[styles.pickerButtonText, role === 'עובד תחזוקה' && styles.pickerButtonTextSelected]}>
-                        עובד תחזוקה
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.pickerButton, role === 'מנהל' && styles.pickerButtonSelected]}
-                      onPress={() => setRole('מנהל')}
-                    >
-                      <Text style={[styles.pickerButtonText, role === 'מנהל' && styles.pickerButtonTextSelected]}>
-                        מנהל
-                      </Text>
-                    </Pressable>
-                  </View>
+                  <Pressable
+                    style={styles.dropdownButton}
+                    onPress={() => setShowRoleDropdown(!showRoleDropdown)}
+                  >
+                    <Text style={styles.dropdownButtonText}>{role}</Text>
+                    <Text style={styles.dropdownCaret}>▾</Text>
+                  </Pressable>
+                  {showRoleDropdown && (
+                    <View style={styles.dropdownList}>
+                      {['עובד תחזוקה', 'עובד שעתי', 'מנהל ראשי', 'מנהל הזמנות', 'מנהל מתחם'].map((r) => (
+                        <Pressable
+                          key={r}
+                          style={[
+                            styles.dropdownItem,
+                            role === r && styles.dropdownItemSelected,
+                          ]}
+                          onPress={() => {
+                            setRole(r as typeof role);
+                            setShowRoleDropdown(false);
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.dropdownItemText,
+                              role === r && styles.dropdownItemTextSelected,
+                            ]}
+                          >
+                            {r}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
                 </View>
                 <View style={styles.field}>
                   <Text style={styles.label}>תמונת פרופיל</Text>
@@ -2266,6 +2297,14 @@ function AppContent() {
   }
 
   if (screen === 'hub') {
+    // Helper function to check if user is a manager (can see everything)
+    const isManager = (role: string | null): boolean => {
+      if (!role) return false;
+      return role === 'מנהל ראשי' || role === 'מנהל הזמנות' || role === 'מנהל מתחם' || role === 'מנהל';
+    };
+    
+    const canSeeEverything = isManager(userRole);
+    
     const totalRevenue = orders.reduce((sum, o) => sum + o.totalAmount, 0);
     const pendingAmount = totalRevenue - totals.totalPaid;
     const activeOrders = orders.filter(o => o.status !== 'בוטל' && o.status !== 'שולם').length;
@@ -2320,7 +2359,7 @@ function AppContent() {
             </View>
           </View>
 
-          {userRole === 'מנהל' && (
+          {canSeeEverything && (
             <View style={styles.statsGrid}>
               <View style={[styles.statCard, { backgroundColor: '#dbeafe', borderColor: '#3b82f6' }]}>
                 <Text style={styles.statValue}>{totals.count}</Text>
@@ -2358,7 +2397,7 @@ function AppContent() {
           <View style={styles.quickActions}>
             <Text style={styles.sectionTitle}>אפשרויות</Text>
             <View style={styles.quickActionsRow}>
-              {userRole === 'מנהל' && (
+              {canSeeEverything && (
                 <Pressable
                   style={[styles.quickActionBtn, { backgroundColor: '#3b82f6' }]}
                   onPress={() => setScreen('orders')}
@@ -2414,7 +2453,7 @@ function AppContent() {
                   <Text style={styles.quickActionText}>תחזוקה</Text>
                 </View>
               </Pressable>
-              {userRole === 'מנהל' && (
+              {canSeeEverything && (
                 <>
                   <Pressable
                     style={[styles.quickActionBtn, { backgroundColor: '#6366f1' }]}
@@ -2436,7 +2475,7 @@ function AppContent() {
                   </Pressable>
                 </>
               )}
-              {userRole === 'מנהל' ? (
+              {canSeeEverything ? (
                 <Pressable
                   style={[styles.quickActionBtn, { backgroundColor: '#ec4899' }]}
                   onPress={() => setScreen('employeeManagement')}
@@ -2863,6 +2902,7 @@ function AppContent() {
     return (
       <MaintenanceScreen
         units={maintenanceUnits}
+        isLoading={isLoadingMaintenanceUnits}
         onSelectUnit={(unitId) => {
           setSelectedMaintenanceUnitId(unitId);
           setScreen('maintenanceTasks');
@@ -7605,7 +7645,9 @@ function EmployeeManagementScreen({
   };
 
   const employeesWithStats = useMemo(() => {
-    const employeeAccounts = employees.filter(emp => emp.role !== 'מנהל');
+    // Filter to show only employees (not managers)
+    const managerRoles = ['מנהל', 'מנהל ראשי', 'מנהל הזמנות', 'מנהל מתחם'];
+    const employeeAccounts = employees.filter(emp => !managerRoles.includes(emp.role));
     
     return employeeAccounts.map(emp => {
       const logs = getFilteredLogs(emp.username);
@@ -7729,6 +7771,10 @@ function EmployeeManagementScreen({
                 </View>
                 <View style={styles.employeeInfo}>
                   <Text style={styles.employeeName}>{emp.username}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                    <Text style={{ fontSize: 12, color: '#64748b' }}>שעות עבודה:</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#0f172a' }}>{emp.hours} שעות</Text>
+                  </View>
                 </View>
               </View>
 
@@ -8106,6 +8152,7 @@ type NewMaintenanceTaskScreenProps = {
 
 function MaintenanceScreen({
   units,
+  isLoading,
   onSelectUnit,
   onBack,
   safeAreaInsets,
@@ -8151,6 +8198,8 @@ function MaintenanceScreen({
         <View style={styles.unitsGrid}>
           {units.map(unit => {
             const stats = getUnitStats(unit);
+            // Check if data has been loaded (any unit has tasks or we've attempted to load)
+            const hasLoadedData = units.some(u => u.tasks.length > 0) || !isLoading;
             return (
               <Pressable
                 key={unit.id}
@@ -8169,22 +8218,30 @@ function MaintenanceScreen({
                   </View>
                 </View>
                 <View style={styles.unitStats}>
-                  <View style={styles.unitStatItem}>
-                    <Text style={styles.unitStatValue}>{stats.total}</Text>
-                    <Text style={styles.unitStatLabel}>סה״כ משימות</Text>
-                  </View>
-                  <View style={styles.unitStatItem}>
-                    <Text style={[styles.unitStatValue, { color: '#f59e0b' }]}>
-                      {stats.open}
-                    </Text>
-                    <Text style={styles.unitStatLabel}>פתוחות</Text>
-                  </View>
-                  <View style={styles.unitStatItem}>
-                    <Text style={[styles.unitStatValue, { color: '#22c55e' }]}>
-                      {stats.closed}
-                    </Text>
-                    <Text style={styles.unitStatLabel}>סגורות</Text>
-                  </View>
+                  {isLoading && !hasLoadedData ? (
+                    <View style={[styles.unitStatItem, { width: '100%', alignItems: 'center', paddingVertical: 8 }]}>
+                      <ActivityIndicator size="small" color="#3b82f6" />
+                    </View>
+                  ) : (
+                    <>
+                      <View style={styles.unitStatItem}>
+                        <Text style={styles.unitStatValue}>{stats.total}</Text>
+                        <Text style={styles.unitStatLabel}>סה״כ משימות</Text>
+                      </View>
+                      <View style={styles.unitStatItem}>
+                        <Text style={[styles.unitStatValue, { color: '#f59e0b' }]}>
+                          {stats.open}
+                        </Text>
+                        <Text style={styles.unitStatLabel}>פתוחות</Text>
+                      </View>
+                      <View style={styles.unitStatItem}>
+                        <Text style={[styles.unitStatValue, { color: '#22c55e' }]}>
+                          {stats.closed}
+                        </Text>
+                        <Text style={styles.unitStatLabel}>סגורות</Text>
+                      </View>
+                    </>
+                  )}
                 </View>
               </Pressable>
             );
@@ -8444,21 +8501,8 @@ function MaintenanceTaskDetailScreen({
                 // Upload file to storage
                 const mediaUrl = await uploadFileToStorage(asset.uri, mime, asset.fileName);
                 
-                // Update task with storage URL or data URI
-                const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks/${encodeURIComponent(task.id)}`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    status: 'סגור',
-                    image_uri: mediaUrl,
-                  }),
-                });
-                
-                if (!res.ok) {
-                  throw new Error(`HTTP ${res.status}`);
-                }
-                
-                await loadMaintenanceUnits();
+                // Automatically close the task when media is uploaded (same as photo path)
+                await onUpdateTask(task.id, { status: 'סגור', imageUri: mediaUrl });
                 Alert.alert('הצלחה', 'המשימה נסגרה בהצלחה');
                 setShowCloseModal(false);
                 setIsUploadingClose(false);
@@ -11262,6 +11306,59 @@ const styles = StyleSheet.create({
   selectItemTextActive: {
     fontWeight: '700',
     color: '#0f172a',
+  },
+  dropdownButton: {
+    width: '100%',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#fff',
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  dropdownButtonText: {
+    fontSize: 15,
+    color: '#0f172a',
+    fontWeight: '500',
+  },
+  dropdownCaret: {
+    fontSize: 16,
+    color: '#64748b',
+  },
+  dropdownList: {
+    marginTop: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  dropdownItem: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  dropdownItemSelected: {
+    backgroundColor: '#eff6ff',
+  },
+  dropdownItemText: {
+    fontSize: 15,
+    color: '#0f172a',
+    textAlign: 'right',
+  },
+  dropdownItemTextSelected: {
+    color: '#2563eb',
+    fontWeight: '700',
   },
   pickerContainer: {
     flexDirection: 'row-reverse',

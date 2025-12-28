@@ -1,4 +1,4 @@
-package com.frontnative
+package com.bolavilla
 
 import android.app.Application
 import com.facebook.react.PackageList
