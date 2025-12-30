@@ -566,10 +566,43 @@ function AppContent() {
   // Register push notification token with backend
   const registerPushToken = async (username: string) => {
     try {
-      // Generate a unique device token (in production, this would be an FCM token)
-      // For now, we'll use a combination of device info and timestamp
-      const deviceId = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      let token: string | null = null;
       const platform = Platform.OS === 'android' ? 'android' : Platform.OS === 'ios' ? 'ios' : 'web';
+      
+      // Try to get FCM token for Android (works even when app is closed)
+      if (Platform.OS === 'android') {
+        try {
+          const messagingModule = require('@react-native-firebase/messaging');
+          const messaging = messagingModule.default();
+          token = await messaging.getToken();
+          console.log('FCM token obtained:', token?.substring(0, 20) + '...');
+        } catch (fcmError) {
+          console.warn('FCM not available, using fallback token:', fcmError);
+          // Fallback to device ID if FCM not set up
+          token = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        }
+      } else if (Platform.OS === 'ios') {
+        // For iOS, try to get APNs token via Notifee
+        try {
+          if (notifee && notifee.getAPNSToken) {
+            const apnsToken = await notifee.getAPNSToken();
+            if (apnsToken) {
+              token = apnsToken;
+              console.log('APNs token obtained');
+            }
+          }
+        } catch (apnsError) {
+          console.warn('APNs token not available:', apnsError);
+        }
+        
+        // Fallback to device ID
+        if (!token) {
+          token = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        }
+      } else {
+        // Web platform - handled separately
+        token = `web-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      }
       
       // Register token with backend
       const res = await fetch(`${API_BASE_URL}/push/register`, {
@@ -577,7 +610,7 @@ function AppContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username,
-          token: deviceId,
+          token: token,
           platform,
         }),
       });

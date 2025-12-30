@@ -58,3 +58,5 @@ To receive push notifications when the app is **completely closed**, you'll need
 
 The app will request notification permissions automatically on first launch. Make sure to allow them!
 
+
+
