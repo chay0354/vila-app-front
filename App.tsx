@@ -572,12 +572,69 @@ function AppContent() {
       // Try to get FCM token for Android (works even when app is closed)
       if (Platform.OS === 'android') {
         try {
-          const messagingModule = require('@react-native-firebase/messaging');
+          // Try to import Firebase messaging
+          let messagingModule;
+          try {
+            messagingModule = require('@react-native-firebase/messaging');
+          } catch (importError) {
+            console.error('❌ Failed to import @react-native-firebase/messaging:', importError);
+            throw importError;
+          }
+          
+          if (!messagingModule || !messagingModule.default) {
+            throw new Error('Firebase messaging module not properly loaded');
+          }
+          
           const messaging = messagingModule.default();
+          
+          // Request notification permissions first (required for FCM token)
+          try {
+            const authStatus = await messaging.requestPermission();
+            const enabled =
+              authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+              authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+            
+            if (enabled) {
+              console.log('✅ Notification permission granted');
+            } else {
+              console.warn('⚠️ Notification permission denied');
+            }
+          } catch (permError) {
+            console.warn('⚠️ Error requesting notification permission:', permError);
+          }
+          
+          // Now get FCM token
           token = await messaging.getToken();
-          console.log('FCM token obtained:', token?.substring(0, 20) + '...');
+          console.log('✅ FCM token obtained:', token?.substring(0, 20) + '...');
+          
+          // Set up onNewToken callback to handle token updates
+          // This is called whenever the token is refreshed (e.g., after expiration)
+          messaging.onTokenRefresh(async (newToken: string) => {
+            console.log('🔄 FCM token refreshed, updating backend...');
+            try {
+              const res = await fetch(`${API_BASE_URL}/push/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  username,
+                  token: newToken,
+                  platform: 'android',
+                }),
+              });
+              if (res.ok) {
+                console.log('✅ Updated FCM token registered successfully');
+              } else {
+                console.warn('⚠️ Failed to update FCM token:', res.status);
+              }
+            } catch (error) {
+              console.warn('⚠️ Error updating FCM token:', error);
+            }
+          });
         } catch (fcmError) {
-          console.warn('FCM not available, using fallback token:', fcmError);
+          console.error('❌ FCM ERROR - Full details:', fcmError);
+          console.error('❌ FCM Error message:', fcmError?.message || 'No message');
+          console.error('❌ FCM Error stack:', fcmError?.stack || 'No stack');
+          console.warn('⚠️ FCM not available, using fallback token');
           // Fallback to device ID if FCM not set up
           token = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         }

@@ -1,21 +1,28 @@
 // Base API URL for the backend.
-// Uses react-native-config to read from .env file
-const DEFAULT_API_URL = 'https://vila-app-back.vercel.app';
+// MUST be set in .env file - no fallback/default
+// Uses react-native-dotenv (configured in babel.config.js) to read from .env file
+// Only import VITE_API_BASE_URL since that's what's in the .env file
+import { VITE_API_BASE_URL } from '@env';
 
-let apiUrl = DEFAULT_API_URL;
+let apiUrl: string | null = null;
 
-try {
-  // Try to import react-native-config
-  const Config = require('react-native-config').default || require('react-native-config');
-  if (Config && Config.API_BASE_URL) {
-    apiUrl = Config.API_BASE_URL;
-  }
-} catch (e) {
-  // If react-native-config is not available, use default
-  console.warn('react-native-config not available, using default API URL');
+// Use VITE_API_BASE_URL from .env file
+if (VITE_API_BASE_URL) {
+  apiUrl = VITE_API_BASE_URL;
+} else {
+  console.error('ERROR: VITE_API_BASE_URL not found in .env file!');
+  console.error('Please add to your .env file in the front/ directory:');
+  console.error('  VITE_API_BASE_URL=http://127.0.0.1:4000');
+  console.error('  (For Android emulator use: http://10.0.2.2:4000)');
+  throw new Error('VITE_API_BASE_URL is required in .env file');
+}
+
+if (!apiUrl) {
+  throw new Error('VITE_API_BASE_URL must be set in .env file');
 }
 
 // Remove all trailing slashes - endpoints already start with /
 apiUrl = String(apiUrl).trim().replace(/\/+$/, '');
+console.log(`[API Config] Using backend URL from .env: ${apiUrl}`);
 export const API_BASE_URL = apiUrl;
 

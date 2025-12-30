@@ -46,20 +46,36 @@ try {
   // Note: setBackgroundMessageHandler is a static method that must be called at the top level
   if (messagingModule && messagingModule.default && messagingModule.default.setBackgroundMessageHandler) {
     messagingModule.default.setBackgroundMessageHandler(async remoteMessage => {
-      console.log('Background FCM message received:', remoteMessage);
+      console.log('🔔 Background FCM message received (app closed):', remoteMessage);
+      
+      // Create notification channel (required for Android 8+)
+      if (notifee && notifee.createChannel) {
+        await notifee.createChannel({
+          id: 'default',
+          name: 'Default Channel',
+          importance: 4, // HIGH
+          sound: 'default',
+          vibration: true,
+          vibrationPattern: [300, 500],
+        });
+      }
       
       // Display notification using Notifee
       if (notifee && notifee.displayNotification) {
         await notifee.displayNotification({
-          title: remoteMessage.notification?.title || 'התראה חדשה',
+          title: remoteMessage.notification?.title || remoteMessage.data?.title || 'התראה חדשה',
           body: remoteMessage.notification?.body || remoteMessage.data?.body || '',
           android: {
             channelId: 'default',
             importance: 4, // HIGH
             sound: 'default',
             vibrationPattern: [300, 500],
+            pressAction: {
+              id: 'default',
+            },
           },
         });
+        console.log('✅ Background notification displayed');
       }
     });
   }

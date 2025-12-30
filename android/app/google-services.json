@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "438243994510",
+    "project_id": "villa-app-7b5fc",
+    "storage_bucket": "villa-app-7b5fc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:438243994510:android:c45d5cff01262a61c712df",
+        "android_client_info": {
+          "package_name": "com.bolavilla"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDh7yQfje6LfTwxR5GKKm7v4kN97tjC_qQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
