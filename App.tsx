@@ -155,6 +155,8 @@ type Order = {
   paidAmount: number;
   totalAmount: number;
   paymentMethod: string;
+  createdBy?: string;
+  openedBy?: string;
 };
 
 type InspectionMission = {
@@ -229,7 +231,9 @@ type MaintenanceTask = {
   createdDate: string;
   assignedTo?: string;
   imageUri?: string;
+  closingImageUri?: string;
   media?: SelectedMedia | null;
+  room?: string;
 };
 
 type MaintenanceUnit = {
@@ -237,6 +241,7 @@ type MaintenanceUnit = {
   name: string;
   type: 'יחידה' | 'קוטג׳';
   tasks: MaintenanceTask[];
+  stats?: { total: number; open: number; closed: number }; // Optional stats for lightweight loading
 };
 
 const statusOptions: OrderStatus[] = [
@@ -484,6 +489,7 @@ function AppContent() {
   const [reportsSummaryError, setReportsSummaryError] = useState<string | null>(null);
   const [maintenanceTasksReport, setMaintenanceTasksReport] = useState<any[]>([]);
   const [isLoadingMaintenanceTasks, setIsLoadingMaintenanceTasks] = useState<boolean>(true);
+  const [openMaintenanceTasksCount, setOpenMaintenanceTasksCount] = useState<number>(0);
   const [invoices, setInvoices] = useState<Array<{id: string; total_price?: number | null; extracted_data?: any}>>([]);
   const [employees, setEmployees] = useState<Array<{id: string; username: string; image_url?: string | null; hourly_wage?: number | null; role?: string | null}>>([]);
   const [allAttendanceLogs, setAllAttendanceLogs] = useState<any[]>([]);
@@ -491,6 +497,9 @@ function AppContent() {
   const [previousMaintenanceTasks, setPreviousMaintenanceTasks] = useState<any[]>([]);
   const [previousChatMessages, setPreviousChatMessages] = useState<Array<{id: number; sender: string; content: string; created_at: string}>>([]);
   const [notifiedTaskIds, setNotifiedTaskIds] = useState<Set<string>>(new Set());
+  
+  // Ref to prevent concurrent maintenance tasks requests
+  const maintenanceTasksFetchRef = React.useRef<Promise<any[]> | null>(null);
   const statusBarStyle = screen === 'home' ? 'light-content' : 'dark-content';
   const statusBar = <StatusBar barStyle={statusBarStyle} />;
 
@@ -534,7 +543,108 @@ function AppContent() {
     };
 
     initializeNotifications();
-  }, []);
+
+    // Set up FCM message handlers for Android
+    if (Platform.OS === 'android') {
+      try {
+        const messagingModule = require('@react-native-firebase/messaging');
+        if (messagingModule && messagingModule.default) {
+          const messaging = messagingModule.default();
+          
+          // Handle foreground messages
+          const unsubscribeForeground = messaging.onMessage(async (remoteMessage: any) => {
+            console.log('📱 Foreground FCM message received:', remoteMessage);
+            
+            const notification = remoteMessage.notification;
+            const data = remoteMessage.data || {};
+            
+            if (notification) {
+              // Display notification using Notifee
+              if (notifee) {
+                try {
+                  await notifee.displayNotification({
+                    title: notification.title || 'הודעה חדשה',
+                    body: notification.body || '',
+                    android: {
+                      channelId: 'default',
+                      importance: AndroidImportance?.HIGH || 4,
+                      sound: 'default',
+                      vibrationPattern: [300, 500],
+                      pressAction: {
+                        id: 'default',
+                      },
+                    },
+                    data: data,
+                  });
+                } catch (notifError) {
+                  console.warn('Error displaying notification:', notifError);
+                }
+              }
+            }
+          });
+
+          // Handle notification taps (when app is opened from notification)
+          messaging.onNotificationOpenedApp((remoteMessage: any) => {
+            console.log('📱 Notification opened app:', remoteMessage);
+            const data = remoteMessage.data || {};
+            const notificationType = data.type;
+            
+            if (notificationType === 'maintenance_task' && data.task_id) {
+              // Navigate to maintenance task detail
+              const taskId = data.task_id;
+              // Find the unit that contains this task
+              const unitWithTask = maintenanceUnits.find(unit => 
+                unit.tasks.some(task => task.id === taskId)
+              );
+              if (unitWithTask) {
+                setSelectedMaintenanceUnitId(unitWithTask.id);
+                setSelectedMaintenanceTaskId(taskId);
+                setScreen('maintenanceTaskDetail');
+              } else {
+                // If task not found, navigate to maintenance screen
+                setScreen('maintenance');
+              }
+            } else if (notificationType === 'chat_message') {
+              // Navigate to chat screen
+              setScreen('chat');
+            }
+          });
+
+          // Check if app was opened from a notification (when app was closed)
+          messaging.getInitialNotification().then((remoteMessage: any) => {
+            if (remoteMessage) {
+              console.log('📱 App opened from notification:', remoteMessage);
+              const data = remoteMessage.data || {};
+              const notificationType = data.type;
+              
+              if (notificationType === 'maintenance_task' && data.task_id) {
+                const taskId = data.task_id;
+                const unitWithTask = maintenanceUnits.find(unit => 
+                  unit.tasks.some(task => task.id === taskId)
+                );
+                if (unitWithTask) {
+                  setSelectedMaintenanceUnitId(unitWithTask.id);
+                  setSelectedMaintenanceTaskId(taskId);
+                  setScreen('maintenanceTaskDetail');
+                } else {
+                  setScreen('maintenance');
+                }
+              } else if (notificationType === 'chat_message') {
+                setScreen('chat');
+              }
+            }
+          });
+
+          // Cleanup on unmount
+          return () => {
+            unsubscribeForeground();
+          };
+        }
+      } catch (fcmError) {
+        console.warn('⚠️ FCM message handlers not available:', fcmError);
+      }
+    }
+  }, [maintenanceUnits]);
 
   // Simple notification function using Notifee
   const showNotification = async (title: string, message: string) => {
@@ -820,6 +930,15 @@ function AppContent() {
     { id: '29', name: 'שטיפה לרצפה בחוץ', completed: false },
     { id: '30', name: 'לרוקן את הפחים, לשים שקית חדשה', completed: false },
     { id: '31', name: 'להעביר סמרטוט על הפחים ולשים שקיות', completed: false },
+    // חדרים (Rooms)
+    { id: '32', name: 'חדר 1', completed: false },
+    { id: '33', name: 'חדר 2', completed: false },
+    { id: '34', name: 'חדר 3', completed: false },
+    { id: '35', name: 'חדר 4', completed: false },
+    { id: '36', name: 'חדר 5', completed: false },
+    { id: '37', name: 'חדר 6', completed: false },
+    { id: '38', name: 'חדר 7', completed: false },
+    { id: '39', name: 'חדר 8', completed: false },
   ], []);
 
   const defaultMonthlyInspectionTasks: InspectionTask[] = useMemo(() => [
@@ -1420,11 +1539,19 @@ function AppContent() {
     const pollInterval = setInterval(() => {
       loadMaintenanceTasksReport();
       loadChatMessages();
+      // Also refresh maintenance units stats (which updates the badge count)
+      if (screen === 'hub' || screen === 'maintenance') {
+        loadMaintenanceUnits();
+      }
     }, 10000); // Check every 10 seconds
     
     // Initial load
     loadMaintenanceTasksReport();
     loadChatMessages();
+    // Load maintenance units stats when on hub or maintenance screen
+    if (screen === 'hub' || screen === 'maintenance') {
+      loadMaintenanceUnits();
+    }
     
     return () => clearInterval(pollInterval);
   }, [userName, screen]);
@@ -1628,58 +1755,108 @@ function AppContent() {
     }
   };
 
+  // Shared function to fetch maintenance tasks (prevents duplicate requests)
+  const fetchMaintenanceTasks = async (): Promise<any[]> => {
+    // If there's already a request in progress, return that promise
+    if (maintenanceTasksFetchRef.current) {
+      return maintenanceTasksFetchRef.current;
+    }
+    
+    // Create new fetch promise
+    const fetchPromise = (async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks`);
+        if (!res.ok) {
+          maintenanceTasksFetchRef.current = null;
+          return [];
+        }
+        const data = await res.json();
+        const tasks = data || [];
+        maintenanceTasksFetchRef.current = null;
+        return tasks;
+      } catch (err) {
+        console.error('Error fetching maintenance tasks:', err);
+        maintenanceTasksFetchRef.current = null;
+        return [];
+      }
+    })();
+    
+    maintenanceTasksFetchRef.current = fetchPromise;
+    return fetchPromise;
+  };
+
+  // Lightweight function for checking new assignments (used in polling)
   const loadMaintenanceTasksReport = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const tasks = data || [];
+      setIsLoadingMaintenanceTasks(true);
       
-      // Check for new assignments to current user
+      // Check for new assignments to current user using lightweight endpoint
       if (userName) {
-        const previousTasksMap = previousMaintenanceTasks.length > 0 
-          ? new Map(previousMaintenanceTasks.map((t: any) => [t.id, t]))
-          : new Map();
         const currentUser = systemUsers.find(u => u.username === userName);
         const currentUserId = currentUser?.id?.toString();
-        const newNotifiedIds = new Set(notifiedTaskIds);
         
-        tasks.forEach((t: any) => {
-          const prevTask = previousTasksMap.get(t.id);
-          const currentAssignedTo = (t.assignedTo || t.assigned_to || '').toString().trim();
-          const prevAssignedTo = prevTask ? ((prevTask.assignedTo || prevTask.assigned_to || '').toString().trim()) : '';
+        // Use lightweight assignments endpoint - only gets id, assigned_to, title
+        const res = await fetch(
+          `${API_BASE_URL}/api/maintenance/tasks/assignments?username=${encodeURIComponent(userName)}${currentUserId ? `&user_id=${encodeURIComponent(currentUserId)}` : ''}`
+        );
+        
+        if (res.ok) {
+          const assignments = await res.json();
+          const previousTasksMap = previousMaintenanceTasks.length > 0 
+            ? new Map(previousMaintenanceTasks.map((t: any) => [t.id, t]))
+            : new Map();
+          const newNotifiedIds = new Set(notifiedTaskIds);
           
-          // Check if assigned to current user (by username or user ID)
-          const isAssignedToMe = 
-            currentAssignedTo && (
-              currentAssignedTo === userName || 
-              (currentUserId && currentAssignedTo === currentUserId)
-            );
-          
-          // Check both the original set and the new set to prevent duplicates in the same polling cycle
-          if (isAssignedToMe && !notifiedTaskIds.has(t.id) && !newNotifiedIds.has(t.id)) {
-            // Check if this is a new assignment (task didn't exist before OR assignment changed to me)
-            const isNewAssignment = !prevTask || (prevAssignedTo !== currentAssignedTo);
+          assignments.forEach((t: any) => {
+            const prevTask = previousTasksMap.get(t.id);
+            const currentAssignedTo = (t.assigned_to || '').toString().trim();
+            const prevAssignedTo = prevTask ? ((prevTask.assignedTo || prevTask.assigned_to || '').toString().trim()) : '';
             
-            if (isNewAssignment) {
-              // Add to notified set immediately to prevent duplicate notifications
-              newNotifiedIds.add(t.id);
-              showNotification(
-                'משימה חדשה הוקצתה לך',
-                `משימת תחזוקה חדשה: ${t.title || 'ללא כותרת'}`
+            // Check if assigned to current user (by username or user ID)
+            const isAssignedToMe = 
+              currentAssignedTo && (
+                currentAssignedTo === userName || 
+                (currentUserId && currentAssignedTo === currentUserId)
               );
+            
+            // Check both the original set and the new set to prevent duplicates in the same polling cycle
+            if (isAssignedToMe && !notifiedTaskIds.has(t.id) && !newNotifiedIds.has(t.id)) {
+              // Check if this is a new assignment (task didn't exist before OR assignment changed to me)
+              const isNewAssignment = !prevTask || (prevAssignedTo !== currentAssignedTo);
+              
+              if (isNewAssignment) {
+                // Add to notified set immediately to prevent duplicate notifications
+                newNotifiedIds.add(t.id);
+                showNotification(
+                  'משימה חדשה הוקצתה לך',
+                  `משימת תחזוקה חדשה: ${t.title || 'ללא כותרת'}`
+                );
+              }
             }
-          }
-        });
-        
-        setNotifiedTaskIds(newNotifiedIds);
+          });
+          
+          setNotifiedTaskIds(newNotifiedIds);
+          // Store lightweight assignments for comparison next time
+          setPreviousMaintenanceTasks(assignments);
+        }
       }
       
-      setPreviousMaintenanceTasks(tasks);
-      setMaintenanceTasksReport(tasks);
       setIsLoadingMaintenanceTasks(false);
     } catch (err) {
       console.error('Error loading maintenance tasks for reports:', err);
+      setIsLoadingMaintenanceTasks(false);
+    }
+  };
+
+  // Full function for loading all tasks (used in reports screen)
+  const loadMaintenanceTasksReportFull = async () => {
+    try {
+      setIsLoadingMaintenanceTasks(true);
+      const tasks = await fetchMaintenanceTasks();
+      setMaintenanceTasksReport(tasks);
+      setIsLoadingMaintenanceTasks(false);
+    } catch (err) {
+      console.error('Error loading full maintenance tasks report:', err);
       setIsLoadingMaintenanceTasks(false);
     }
   };
@@ -1690,53 +1867,48 @@ function AppContent() {
       // Set a minimum loading time for better UX (300ms)
       const loadingPromise = new Promise(resolve => setTimeout(resolve, 300));
       
-      const fetchPromise = fetch(`${API_BASE_URL}/api/maintenance/tasks`);
+      // Use lightweight stats endpoint - only get counts, not full task data
+      const fetchPromise = fetch(`${API_BASE_URL}/api/maintenance/tasks/stats`);
       
       const [res] = await Promise.all([fetchPromise, loadingPromise]);
       if (!res.ok) {
         setIsLoadingMaintenanceUnits(false);
         return;
       }
-      const data = (await res.json()) || [];
+      const statsData = (await res.json()) || [];
 
-      // Keep the 10 units always visible, and attach tasks by unit_id
+      // Calculate total open tasks for the badge
+      const totalOpen = (statsData || []).reduce((sum: number, stat: any) => {
+        return sum + (stat.open || 0);
+      }, 0);
+      setOpenMaintenanceTasksCount(totalOpen);
+
+      // Keep the 10 units always visible, and attach stats by unit_id
       const baseUnits: MaintenanceUnit[] = UNIT_NAMES.map(name => ({
         id: unitIdFromName(name),
         name,
         type: 'יחידה',
-        tasks: [],
+        tasks: [], // Empty tasks array - we only have stats, not full task data
+        stats: { total: 0, open: 0, closed: 0 }, // Initialize with zero stats
       }));
 
       const byId = new Map<string, MaintenanceUnit>();
       baseUnits.forEach(u => byId.set(u.id, u));
 
-      (data || []).forEach((t: any) => {
-        const unitId = normalizeMaintenanceUnitId(t.unit_id || t.unitId || t.unit);
+      // Attach stats to units
+      statsData.forEach((stat: any) => {
+        const unitId = normalizeMaintenanceUnitId(stat.unit_id);
         const unit = byId.get(unitId) || byId.get('unit-1');
-        if (!unit) return;
-
-        const task: MaintenanceTask = {
-          id: (t.id || `task-${Date.now()}`).toString(),
-          unitId,
-          title: (t.title || '').toString(),
-          description: (t.description || '').toString(),
-          status: (t.status || 'פתוח') as MaintenanceStatus,
-          createdDate: (t.created_date || t.createdDate || new Date().toISOString().split('T')[0]).toString(),
-          assignedTo: (t.assigned_to || t.assignedTo || undefined)?.toString(),
-          imageUri: (t.image_uri || t.imageUri || undefined)?.toString(),
-          media: null,
-        };
-
-        unit.tasks.push(task);
-      });
-
-      // Sort tasks newest first per unit
-      baseUnits.forEach(u => {
-        u.tasks.sort((a, b) => (b.createdDate || '').localeCompare(a.createdDate || ''));
+        if (unit) {
+          unit.stats = {
+            total: stat.total || 0,
+            open: stat.open || 0,
+            closed: stat.closed || 0,
+          };
+        }
       });
 
       setMaintenanceUnits(baseUnits);
-      setMaintenanceTasksReport(data || []);
       setIsLoadingMaintenanceUnits(false);
     } catch (err) {
       console.error('Error loading maintenance units:', err);
@@ -1762,6 +1934,8 @@ function AppContent() {
         paidAmount: Number(o.paid_amount ?? o.paidAmount ?? 0),
         totalAmount: Number(o.total_amount ?? o.totalAmount ?? 0),
         paymentMethod: o.payment_method ?? o.paymentMethod ?? 'לא צוין',
+        createdBy: o.created_by ?? o.createdBy ?? undefined,
+        openedBy: o.opened_by ?? o.openedBy ?? undefined,
       }));
       setOrders(list);
     } catch (err) {
@@ -1866,6 +2040,10 @@ function AppContent() {
       loadInventoryOrders();
       loadReportsSummary();
       loadAllWarehouseItemsForReports();
+      // Load full maintenance tasks only if not already loaded
+      if (maintenanceTasksReport.length === 0) {
+        loadMaintenanceTasksReportFull();
+      }
       loadMaintenanceTasksReport();
       loadAttendanceLogsReport();
       if (userName) loadAttendanceStatus();
@@ -1890,6 +2068,10 @@ function AppContent() {
     if (screen === 'maintenance' || screen === 'maintenanceTasks' || screen === 'maintenanceTaskDetail') {
       setIsLoadingMaintenanceUnits(true);
       loadMaintenanceUnits();
+    }
+    // Load full tasks report only when reports screen is shown
+    if (screen === 'reports' && maintenanceTasksReport.length === 0) {
+      loadMaintenanceTasksReportFull();
     }
   }, [screen]);
 
@@ -2143,12 +2325,33 @@ function AppContent() {
       console.log('Auth response data:', data);
       
       if (!res.ok) {
-        const errorMsg = data.detail || data.message || `שגיאה ${res.status}: ${res.statusText}`;
+        let errorMsg = data.detail || data.message || `שגיאה ${res.status}: ${res.statusText}`;
+        // Translate common error messages to Hebrew
+        if (errorMsg.includes('pending approval') || errorMsg.includes('Pending approval')) {
+          errorMsg = 'החשבון שלך ממתין לאישור מנהל. אנא חכה לאישור כדי להתחבר.';
+        } else if (errorMsg.includes('Invalid username or password')) {
+          errorMsg = 'שם משתמש או סיסמה שגויים';
+        }
         setError(errorMsg);
         return;
       }
       
-      // Success - set user and navigate to hub
+      // For signup, check approval status
+      if (mode === 'signup') {
+        const approvalStatus = data.approval_status || 'approved';
+        if (approvalStatus === 'pending') {
+          // Account created but pending approval - don't log in
+          setError('החשבון נוצר בהצלחה! חכה לאישור מנהל כדי להתחבר.');
+          setName('');
+          setPassword('');
+          setConfirmPassword('');
+          setImageUri(null);
+          setImageBase64(null);
+          return;
+        }
+      }
+      
+      // Success - set user and navigate to hub (only if approved or login)
       const username = data.username || name.trim();
       setUserName(username);
       setUserRole(data.role || null);
@@ -2184,6 +2387,34 @@ function AppContent() {
     );
   };
 
+  const handleCloseOrder = async (orderId: string, paymentMethod: string) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'שולם',
+          payment_method: paymentMethod,
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+        Alert.alert('שגיאה', errorData.detail || 'לא ניתן לסגור את ההזמנה');
+        return;
+      }
+
+      // Update local state
+      updateOrder(orderId, {
+        status: 'שולם',
+        paymentMethod: paymentMethod,
+      });
+    } catch (err: any) {
+      console.error('Error closing order:', err);
+      Alert.alert('שגיאה', err.message || 'אירעה שגיאה בסגירת ההזמנה');
+    }
+  };
+
   const createOrder = async () => {
     try {
       const today = new Date().toISOString().split('T')[0];
@@ -2201,6 +2432,7 @@ function AppContent() {
         paid_amount: 0,
         total_amount: 0,
         payment_method: null,
+        opened_by: userName || undefined,
       };
 
       const res = await fetch(`${API_BASE_URL}/orders`, {
@@ -2231,6 +2463,8 @@ function AppContent() {
         paidAmount: createdOrder.paid_amount || 0,
         totalAmount: createdOrder.total_amount || 0,
         paymentMethod: createdOrder.payment_method || undefined,
+        createdBy: createdOrder.created_by || createdOrder.opened_by || undefined,
+        openedBy: createdOrder.opened_by || createdOrder.created_by || undefined,
       };
 
       setOrders(prev => [...prev, mappedOrder]);
@@ -2481,30 +2715,13 @@ function AppContent() {
               }}
               style={styles.signOutButton}
             >
-              <Text style={styles.signOutIcon}>🚪</Text>
+              <Text style={styles.signOutIcon}>🛑</Text>
               <Text style={styles.signOutText}>יציאה</Text>
             </Pressable>
             <View style={styles.userChip}>
               <Text style={styles.userChipText}>שלום {userName}</Text>
             </View>
           </View>
-
-          {canSeeEverything && (
-            <View style={styles.statsGrid}>
-              <View style={[styles.statCard, { backgroundColor: '#dbeafe', borderColor: '#3b82f6' }]}>
-                <Text style={styles.statValue}>{totals.count}</Text>
-                <Text style={styles.statLabel}>מספר הזמנות</Text>
-              </View>
-              <View style={[styles.statCard, { backgroundColor: '#dcfce7', borderColor: '#22c55e' }]}>
-                <Text style={styles.statValue}>₪{totalRevenue.toLocaleString('he-IL')}</Text>
-                <Text style={styles.statLabel}>הכנסות</Text>
-              </View>
-              <View style={[styles.statCard, { backgroundColor: '#fee2e2', borderColor: '#ef4444' }]}>
-                <Text style={styles.statValue}>₪{totalExpenses.toLocaleString('he-IL')}</Text>
-                <Text style={styles.statLabel}>הוצאות</Text>
-              </View>
-            </View>
-          )}
 
           <View style={styles.welcomeSection}>
             <View style={styles.welcomeCard}>
@@ -2517,6 +2734,12 @@ function AppContent() {
                   </View>
                 )}
               </View>
+              <Pressable
+                style={styles.welcomeChatButton}
+                onPress={() => setScreen('chat')}
+              >
+                <Text style={styles.welcomeChatIcon}>💬</Text>
+              </Pressable>
               <View style={styles.welcomeContent}>
                 <Text style={styles.welcomeTitle}>שלום {userName}</Text>
                 <Text style={styles.welcomeSubtitle}>ברוך הבא למערכת הניהול</Text>
@@ -2575,9 +2798,14 @@ function AppContent() {
                 </View>
               </Pressable>
               <Pressable
-                style={[styles.quickActionBtn, { backgroundColor: '#22c55e' }]}
+                style={[styles.quickActionBtn, { backgroundColor: '#22c55e', position: 'relative' }]}
                 onPress={() => setScreen('maintenance')}
               >
+                {openMaintenanceTasksCount > 0 && (
+                  <View style={styles.maintenanceBadge}>
+                    <Text style={styles.maintenanceBadgeText}>{openMaintenanceTasksCount}</Text>
+                  </View>
+                )}
                 <View style={{ alignItems: 'center', justifyContent: 'center' }}>
                   <Text style={styles.quickActionIcon}>🛠️</Text>
                   <Text style={styles.quickActionText}>תחזוקה</Text>
@@ -2670,19 +2898,20 @@ function AppContent() {
         onSave={async (id, changes) => {
           try {
             // Map frontend changes to backend format
-            const backendChanges: any = {
-              status: changes.status,
-              paid_amount: changes.paidAmount,
-              payment_method: changes.paymentMethod,
-              total_amount: changes.totalAmount,
-              guest_name: changes.guestName,
-              unit_number: changes.unitNumber,
-              arrival_date: changes.arrivalDate,
-              departure_date: changes.departureDate,
-              guests_count: changes.guestsCount,
-              special_requests: changes.specialRequests,
-              internal_notes: changes.internalNotes,
-            };
+      const backendChanges: any = {
+        status: changes.status,
+        paid_amount: changes.paidAmount,
+        payment_method: changes.paymentMethod,
+        total_amount: changes.totalAmount,
+        guest_name: changes.guestName,
+        unit_number: changes.unitNumber,
+        arrival_date: changes.arrivalDate,
+        departure_date: changes.departureDate,
+        guests_count: changes.guestsCount,
+        special_requests: changes.specialRequests,
+        internal_notes: changes.internalNotes,
+        opened_by: userName || undefined,
+      };
 
             const res = await fetch(`${API_BASE_URL}/api/orders/${id}`, {
               method: 'PATCH',
@@ -2779,9 +3008,19 @@ function AppContent() {
   }
 
   if (screen === 'cleaningInspections') {
-    const cleaningMissionsAll = [...cleaningInspectionMissions].sort((a, b) =>
-      (a.departureDate || '').localeCompare(b.departureDate || ''),
-    );
+    const cleaningMissionsAll = [...cleaningInspectionMissions].sort((a, b) => {
+      const aStatus = computeInspectionStatus(a);
+      const bStatus = computeInspectionStatus(b);
+      const aIsClosed = aStatus === 'הביקורת הושלמה';
+      const bIsClosed = bStatus === 'הביקורת הושלמה';
+      
+      // Put closed missions at the bottom
+      if (aIsClosed && !bIsClosed) return 1;
+      if (!aIsClosed && bIsClosed) return -1;
+      
+      // For same status, sort by date
+      return (a.departureDate || '').localeCompare(b.departureDate || '');
+    });
     return (
       <CleaningInspectionsScreen
         missions={cleaningMissionsAll}
@@ -3033,11 +3272,15 @@ function AppContent() {
       <MaintenanceScreen
         units={maintenanceUnits}
         isLoading={isLoadingMaintenanceUnits}
+        onNewTask={(unitId) => {
+          setSelectedMaintenanceUnitId(unitId);
+          setScreen('newMaintenanceTask');
+        }}
         onSelectUnit={(unitId) => {
           setSelectedMaintenanceUnitId(unitId);
           setScreen('maintenanceTasks');
         }}
-        onBack={() => setScreen('hub')}
+        onBack={() => setScreen('maintenance')}
         safeAreaInsets={safeAreaInsets}
         statusBar={statusBar}
       />
@@ -3057,6 +3300,12 @@ function AppContent() {
         onSelectTask={(taskId) => {
           setSelectedMaintenanceTaskId(taskId);
           setScreen('maintenanceTaskDetail');
+        }}
+        onTasksLoaded={(unitId, tasks) => {
+          // Update maintenanceUnits state with loaded tasks
+          setMaintenanceUnits(prev => prev.map(u => 
+            u.id === unitId ? { ...u, tasks } : u
+          ));
         }}
         onNewTask={() => setScreen('newMaintenanceTask')}
         onBack={() => setScreen('maintenance')}
@@ -3099,10 +3348,10 @@ function AppContent() {
           setIsLoadingMaintenanceTasks(true);
           loadOrders();
           loadInventoryOrders();
-          loadReportsSummary();
-          loadAllWarehouseItemsForReports();
-          loadMaintenanceTasksReport();
-          loadAttendanceLogsReport();
+      loadReportsSummary();
+      loadAllWarehouseItemsForReports();
+      // Full maintenance tasks report loaded in separate useEffect to avoid duplicate calls
+      loadAttendanceLogsReport();
           if (userName) loadAttendanceStatus();
         }}
         onOpenOrders={() => setScreen('orders')}
@@ -3139,6 +3388,7 @@ function AppContent() {
   if (screen === 'employeeManagement') {
     return (
       <EmployeeManagementScreen
+        userName={userName || ''}
         employees={employees}
         attendanceLogs={allAttendanceLogs}
         onBack={() => setScreen('hub')}
@@ -3153,8 +3403,31 @@ function AppContent() {
   }
 
   if (screen === 'maintenanceTaskDetail') {
-    const unit = maintenanceUnits.find(u => u.id === selectedMaintenanceUnitId);
-    const task = unit?.tasks.find(t => t.id === selectedMaintenanceTaskId);
+    // Find unit and task
+    let unit = maintenanceUnits.find(u => u.id === selectedMaintenanceUnitId);
+    let task = unit?.tasks.find(t => t.id === selectedMaintenanceTaskId);
+    
+    // If not found, create placeholders - the detail screen will load the actual data
+    if (!unit && selectedMaintenanceUnitId) {
+      unit = {
+        id: selectedMaintenanceUnitId,
+        name: 'יחידה',
+        type: 'יחידה' as const,
+        tasks: [],
+      };
+    }
+    
+    if (!task && selectedMaintenanceTaskId) {
+      task = {
+        id: selectedMaintenanceTaskId,
+        unitId: selectedMaintenanceUnitId || '',
+        title: '',
+        description: '',
+        status: 'פתוח' as MaintenanceStatus,
+        createdDate: new Date().toISOString().split('T')[0],
+      };
+    }
+    
     if (!task || !unit) {
       setScreen('maintenanceTasks');
       return null;
@@ -3236,6 +3509,7 @@ function AppContent() {
               created_date: task.createdDate,
             };
             if (task.assignedTo) jsonPayload.assigned_to = task.assignedTo;
+            if (task.room) jsonPayload.room = task.room;
             
             // Media is already uploaded to storage when selected (like PWA), just use the URI
             if (task.media?.uri) {
@@ -3318,7 +3592,13 @@ function AppContent() {
       {statusBar}
       <View style={styles.ordersHeader}>
         <Pressable
-          onPress={() => setScreen('hub')}
+          onPress={() => {
+            if (selectedOrderUnit) {
+              setSelectedOrderUnit(null);
+            } else {
+              setScreen('hub');
+            }
+          }}
           style={styles.backButton}
         >
           <Text style={styles.backButtonText}>← חזרה</Text>
@@ -3367,12 +3647,6 @@ function AppContent() {
         ) : selectedOrderUnit ? (
           <View>
             <View style={styles.ordersUnitHeader}>
-              <Pressable
-                style={styles.ordersBackToUnitsButton}
-                onPress={() => setSelectedOrderUnit(null)}
-              >
-                <Text style={styles.ordersBackToUnitsButtonText}>← חזרה לרשימת יחידות</Text>
-              </Pressable>
               <Text style={styles.ordersUnitTitle}>הזמנות - {selectedOrderUnit}</Text>
             </View>
             <View style={styles.ordersList}>
@@ -3387,6 +3661,7 @@ function AppContent() {
                       setSelectedOrderId(id);
                       setScreen('orderEdit');
                     }}
+                    onClose={handleCloseOrder}
                   />
                 ))}
             </View>
@@ -3445,9 +3720,14 @@ type OrderCardProps = {
     changes: Partial<Pick<Order, 'status' | 'paidAmount' | 'paymentMethod'>>,
   ) => void;
   onEdit: (id: string) => void;
+  onClose?: (id: string, paymentMethod: string) => void;
 };
 
-function OrderCard({ order, onEdit }: OrderCardProps) {
+function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
+  const [showCloseModal, setShowCloseModal] = React.useState(false);
+  const [showOtherPayment, setShowOtherPayment] = React.useState(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = React.useState('');
+
   const paidPercent = Math.min(
     100,
     order.totalAmount > 0
@@ -3456,25 +3736,77 @@ function OrderCard({ order, onEdit }: OrderCardProps) {
   );
 
   const remainingAmount = order.totalAmount - order.paidAmount;
+  
+  // Check if order is open (not fully paid or cancelled)
+  const isOpen = order.status !== 'שולם' && order.status !== 'בוטל';
+  
+  const handleCloseOrder = (method: string) => {
+    if (onClose) {
+      onClose(order.id, method);
+    }
+    setShowCloseModal(false);
+    setShowOtherPayment(false);
+    setSelectedPaymentMethod('');
+  };
+  
+  const handleCloseWithCreditCard = () => {
+    handleCloseOrder('אשראי');
+  };
+  
+  const handleCloseWithOther = () => {
+    if (selectedPaymentMethod) {
+      handleCloseOrder(selectedPaymentMethod);
+    }
+  };
 
   return (
-    <View style={[styles.card, styles.orderCardEnhanced]}>
+    <Pressable
+      onPress={() => onEdit(order.id)}
+      style={[styles.card, styles.orderCardEnhanced]}
+    >
       {/* Header with Unit */}
       <View style={styles.orderCardHeaderEnhanced}>
-        <View style={styles.orderCardHeaderLeft}>
-          <View style={styles.orderCardTitleContainer}>
+        <View style={styles.orderCardHeaderRight}>
+            <View style={styles.orderCardTitleContainer}>
             <Text style={styles.orderCardUnitTitle}>{order.unitNumber}</Text>
-            <Text style={styles.orderCardId}>#{order.id}</Text>
           </View>
+        </View>
+        <View style={styles.orderCardHeaderLeft}>
+          <Text style={[styles.orderStatusBadge, isOpen ? styles.orderStatusOpen : styles.orderStatusClosed]}>
+            {isOpen ? 'פתוח' : 'סגור'}
+          </Text>
+          {isOpen && (
+            <Pressable
+              style={styles.orderCloseButton}
+              onPress={() => {
+                setShowCloseModal(true);
+              }}
+            >
+              <Text style={styles.orderCloseButtonText}>סגור הזמנה</Text>
+            </Pressable>
+          )}
+          {!isOpen && order.paymentMethod && (
+            <Text style={styles.orderClosedMethod}>
+              נסגר ב-{order.paymentMethod}
+            </Text>
+          )}
         </View>
       </View>
 
       {/* Guest Info Section */}
       <View style={styles.orderInfoSection}>
         <View style={styles.orderInfoRow}>
-          <View style={styles.orderInfoContent}>
-            <Text style={styles.orderInfoLabel}>אורח</Text>
-            <Text style={styles.orderInfoValue}>{order.guestName}</Text>
+          <View style={styles.orderInfoStacked}>
+            {(order.createdBy || order.openedBy) && (
+              <View style={styles.orderInfoContent}>
+                <Text style={styles.orderInfoLabel}>נוצר על ידי</Text>
+                <Text style={styles.orderInfoValue}>{order.openedBy || order.createdBy}</Text>
+              </View>
+            )}
+            <View style={styles.orderInfoContent}>
+              <Text style={styles.orderInfoLabel}>אורח</Text>
+              <Text style={styles.orderInfoValue}>{order.guestName}</Text>
+            </View>
           </View>
           <View style={styles.orderInfoContent}>
             <Text style={styles.orderInfoLabel}>מספר אורחים</Text>
@@ -3573,7 +3905,96 @@ function OrderCard({ order, onEdit }: OrderCardProps) {
           <Text style={styles.editButtonText}>עריכת הזמנה</Text>
         </Pressable>
       </View>
-    </View>
+
+      {/* Close Order Modal */}
+      {showCloseModal && (
+        <Modal
+          visible={showCloseModal}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => {
+            setShowCloseModal(false);
+            setShowOtherPayment(false);
+            setSelectedPaymentMethod('');
+          }}
+        >
+          <Pressable
+            style={styles.orderCloseModalOverlay}
+            onPress={() => {
+              setShowCloseModal(false);
+              setShowOtherPayment(false);
+              setSelectedPaymentMethod('');
+            }}
+          >
+            <Pressable
+              style={styles.orderCloseModalContent}
+              onPress={(e) => e.stopPropagation()}
+            >
+              <Text style={styles.orderCloseModalTitle}>סגירת הזמנה</Text>
+              <Text style={styles.orderCloseModalSubtitle}>בחרו דרך תשלום לסגירת ההזמנה</Text>
+              
+              {!showOtherPayment ? (
+                <View style={styles.orderCloseModalOptions}>
+                  <Pressable
+                    style={styles.orderCloseOptionButton}
+                    onPress={handleCloseWithCreditCard}
+                  >
+                    <Text style={styles.orderCloseOptionButtonText}>סגור בתשלום בכרטיס אשראי</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.orderCloseOptionButton}
+                    onPress={() => setShowOtherPayment(true)}
+                  >
+                    <Text style={styles.orderCloseOptionButtonText}>סגור בדרך תשלום אחרת</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.orderCloseModalOther}>
+                  <Text style={styles.orderCloseModalLabel}>בחרו דרך תשלום:</Text>
+                  <ScrollView style={styles.orderClosePaymentSelect}>
+                    {paymentOptions.filter(method => method !== 'אשראי').map((method) => (
+                      <Pressable
+                        key={method}
+                        style={[
+                          styles.orderClosePaymentOption,
+                          selectedPaymentMethod === method && styles.orderClosePaymentOptionSelected,
+                        ]}
+                        onPress={() => setSelectedPaymentMethod(method)}
+                      >
+                        <Text style={[
+                          styles.orderClosePaymentOptionText,
+                          selectedPaymentMethod === method && styles.orderClosePaymentOptionTextSelected,
+                        ]}>
+                          {method}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                  <View style={styles.orderCloseModalButtons}>
+                    <Pressable
+                      style={[styles.orderCloseConfirmButton, !selectedPaymentMethod && styles.orderCloseConfirmButtonDisabled]}
+                      onPress={handleCloseWithOther}
+                      disabled={!selectedPaymentMethod}
+                    >
+                      <Text style={styles.orderCloseConfirmButtonText}>אישור</Text>
+                    </Pressable>
+                    <Pressable
+                      style={styles.orderCloseCancelButton}
+                      onPress={() => {
+                        setShowOtherPayment(false);
+                        setSelectedPaymentMethod('');
+                      }}
+                    >
+                      <Text style={styles.orderCloseCancelButtonText}>ביטול</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )}
+            </Pressable>
+          </Pressable>
+        </Modal>
+      )}
+    </Pressable>
   );
 }
 
@@ -3715,10 +4136,23 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.title}>עריכת הזמנה</Text>
-        <Text style={styles.subtitle}>
-          שינוי מלא של פרטי הזמנה והוספת תשלום נוסף
-        </Text>
+        <View style={{ flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <View>
+            <Text style={styles.title}>עריכת הזמנה</Text>
+            <Text style={styles.subtitle}>
+              שינוי מלא של פרטי הזמנה והוספת תשלום נוסף
+            </Text>
+          </View>
+          <Pressable
+            onPress={onCancel}
+            style={({ pressed }) => [
+              styles.backButton,
+              pressed && { opacity: 0.8 },
+            ]}
+          >
+            <Text style={styles.backButtonText}>← חזרה</Text>
+          </Pressable>
+        </View>
 
         <View style={styles.card}>
           <Text style={styles.label}>שם אורח</Text>
@@ -3960,20 +4394,6 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
                 </View>
               </View>
 
-              {/* Show payment addition button for existing orders */}
-              <View style={styles.fieldRow}>
-                <View style={[styles.field, styles.fieldHalf, { justifyContent: 'flex-end' }]}>
-                  <Pressable
-                    onPress={() => setShowAddPayment(true)}
-                    style={({ pressed }) => [
-                      styles.addPaymentTrigger,
-                      pressed && { opacity: 0.9 },
-                    ]}
-                  >
-                    <Text style={styles.addPaymentText}>הוסף / עדכון תשלום</Text>
-                  </Pressable>
-                </View>
-              </View>
             </>
           )}
 
@@ -4534,15 +4954,7 @@ function CleaningInspectionsScreen({
         
         <View style={styles.inspectionsHeader}>
           <View>
-            <Text style={styles.title}>ביקורת ניקיון</Text>
-            <Text style={styles.subtitle}>
-              ניהול משימות ניקיון מפורטות: מטבח, סלון, מסדרון, חצר
-            </Text>
-          </View>
-          <View style={styles.statsBadge}>
-            <Text style={styles.statsBadgeText}>
-              {missions.length} משימות
-            </Text>
+            <Text style={styles.title}>ביקורת ניקיון מנקה</Text>
           </View>
         </View>
 
@@ -4914,13 +5326,14 @@ function categorizeTasks(tasks: InspectionTask[]): TaskCategory[] {
   return orderedCategories;
 }
 
-// Categorize cleaning inspection tasks by category (מטבח, סלון, מסדרון, חצר)
+// Categorize cleaning inspection tasks by category (מטבח, סלון, מסדרון, חצר, חדרים)
 function categorizeCleaningTasks(tasks: InspectionTask[]): TaskCategory[] {
   const categories: { [key: string]: InspectionTask[] } = {
     'מטבח': [],
     'סלון': [],
     'מסדרון': [],
     'חצר': [],
+    'חדרים': [],
   };
 
   tasks.forEach(task => {
@@ -4942,6 +5355,10 @@ function categorizeCleaningTasks(tasks: InspectionTask[]): TaskCategory[] {
     else if (taskId >= 24 && taskId <= 31) {
       categories['חצר'].push(task);
     }
+    // חדרים (Rooms) - tasks 32-39
+    else if (taskId >= 32 && taskId <= 39) {
+      categories['חדרים'].push(task);
+    }
     // Fallback: try to categorize by name
     else {
       const taskName = task.name.toLowerCase();
@@ -4961,6 +5378,8 @@ function categorizeCleaningTasks(tasks: InspectionTask[]): TaskCategory[] {
                  taskName.includes('ברזים') || taskName.includes('עציצים') ||
                  taskName.includes('רצפה בחוץ')) {
         categories['חצר'].push(task);
+      } else if (taskName.includes('חדר')) {
+        categories['חדרים'].push(task);
       } else {
         // Default to מטבח if can't determine
         categories['מטבח'].push(task);
@@ -4970,7 +5389,7 @@ function categorizeCleaningTasks(tasks: InspectionTask[]): TaskCategory[] {
 
   // Return only categories that have tasks, in a specific order
   const orderedCategories: TaskCategory[] = [];
-  const categoryOrder = ['מטבח', 'סלון', 'מסדרון', 'חצר'];
+  const categoryOrder = ['מטבח', 'סלון', 'מסדרון', 'חצר', 'חדרים'];
   
   categoryOrder.forEach(categoryName => {
     if (categories[categoryName].length > 0) {
@@ -5018,7 +5437,7 @@ function InspectionMissionCard({
       return '#ef4444';
     }
     if (statusText === 'זמן הביקורות טרם הגיע') {
-      return '#64748b';
+      return '#ef4444';
     }
     // fallback
     if (statusText) {
@@ -5084,7 +5503,9 @@ function InspectionMissionCard({
           </View>
 
           <View style={styles.tasksList}>
-            {(isCleaningInspection ? categorizeCleaningTasks(mission.tasks) : categorizeTasks(mission.tasks)).map(category => (
+            {(isCleaningInspection ? categorizeCleaningTasks(mission.tasks) : categorizeTasks(mission.tasks))
+              .filter(category => category.name !== 'מסדרון')
+              .map(category => (
               <View key={category.name} style={styles.taskCategory}>
                 <Text style={styles.taskCategoryTitle}>{category.name}</Text>
                 {category.tasks.map(task => (
@@ -5129,7 +5550,7 @@ function InspectionMissionCard({
                 pressed && { opacity: 0.9 },
               ]}
             >
-              <Text style={styles.saveButtonText}>שמור</Text>
+              <Text style={styles.saveButtonText}>ביקורת נקיון מאושרת</Text>
             </Pressable>
           </View>
         </>
@@ -5854,6 +6275,71 @@ type ProductEntry = {
   quantity: string;
 };
 
+type ProductCategory = {
+  name: string;
+  products: string[];
+};
+
+const PRODUCT_CATEGORIES: ProductCategory[] = [
+  {
+    name: 'חומרי ניקוי / מטבח',
+    products: [
+      'סקוץ\' כרית כפולה',
+      'סקוץ\' חד־צדדי',
+      'סקוץ\' מיקרופייבר ריבוע',
+      'מטאטא',
+      'יעה ואשפתון',
+      'מגב',
+      'פרמידה סולימרית',
+      'נייר זכוכית K300',
+      'שקיות זבל גדול',
+      'שקיות זבל מיני–שחורים',
+      'נייר טואלט',
+      'שמן לשטיפה',
+      'סבון גוף משאבה',
+      'קפה שחור והלוגן קפסולות',
+      'ספל קפה',
+      'סבון ידיים',
+      'כלור נוזלי',
+      'נוזל רצפות',
+      'סבון כלים',
+      'שפריצר חלונות',
+      'שפריצר אבנית (אנטי־קאלק)',
+      'מסיר שומנים',
+      'מבשם ריח נעים',
+      'מגב כיור קטן',
+    ],
+  },
+  {
+    name: 'מוצרים טכניים',
+    products: [
+      'שלט TV',
+      'שלט טלוויזיה',
+      'שלט מזגן',
+      'בטריות קטנות',
+      'בטריות גדולות',
+      'מטקות',
+      'כדורי פינגפונג',
+      'כלור לבריכה',
+      'רשת לבריכה',
+      'מציל',
+      'מקל ספיר',
+      'ראש סוכר ניקול',
+      'צבתות ענקיות',
+      'צבתות סיליקון',
+      'צבתות מרק',
+      'כוסות שתייה קלה',
+      'כוסות שתייה חמה',
+      'כוסות שתייה יין',
+      'סכין',
+      'מזלג',
+      'כפית',
+      'כפות',
+      'סכין חד גדול',
+    ],
+  },
+];
+
 function NewWarehouseOrderScreen({
   items,
   onSave,
@@ -5862,44 +6348,41 @@ function NewWarehouseOrderScreen({
   statusBar,
   userName,
 }: NewWarehouseOrderScreenProps) {
-  const [products, setProducts] = useState<ProductEntry[]>([
-    { id: Date.now().toString(), name: '', quantity: '' }
-  ]);
+  const [selectedProducts, setSelectedProducts] = useState<Map<string, number>>(new Map());
   const [selectedHotel, setSelectedHotel] = useState<string>('');
   const [saving, setSaving] = useState(false);
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
-  const handleAddProduct = () => {
-    setProducts([...products, { id: Date.now().toString(), name: '', quantity: '' }]);
+  const handleProductToggle = (productName: string) => {
+    const newSelected = new Map(selectedProducts);
+    if (newSelected.has(productName)) {
+      newSelected.delete(productName);
+    } else {
+      newSelected.set(productName, 1);
+    }
+    setSelectedProducts(newSelected);
   };
 
-  const handleRemoveProduct = (id: string) => {
-    if (products.length > 1) {
-      setProducts(products.filter(p => p.id !== id));
+  const handleQuantityChange = (productName: string, quantity: number) => {
+    if (quantity <= 0) {
+      const newSelected = new Map(selectedProducts);
+      newSelected.delete(productName);
+      setSelectedProducts(newSelected);
+    } else {
+      const newSelected = new Map(selectedProducts);
+      newSelected.set(productName, quantity);
+      setSelectedProducts(newSelected);
     }
   };
 
-  const handleProductChange = (id: string, field: 'name' | 'quantity', value: string) => {
-    setProducts(products.map(p => 
-      p.id === id ? { ...p, [field]: value } : p
-    ));
+  const toggleCategory = (categoryName: string) => {
+    setExpandedCategory(expandedCategory === categoryName ? null : categoryName);
   };
 
   const handleSave = async () => {
-    // Filter out empty products
-    const validProducts = products.filter(p => p.name.trim() && p.quantity.trim());
-    
-    if (validProducts.length === 0) {
-      Alert.alert('שגיאה', 'יש להוסיף לפחות פריט אחד עם שם וכמות');
+    if (selectedProducts.size === 0) {
+      Alert.alert('שגיאה', 'יש לבחור לפחות פריט אחד');
       return;
-    }
-
-    // Validate quantities
-    for (const product of validProducts) {
-      const quantity = parseFloat(product.quantity);
-      if (isNaN(quantity) || quantity <= 0) {
-        Alert.alert('שגיאה', `הכמות של "${product.name}" אינה תקינה`);
-        return;
-      }
     }
 
     setSaving(true);
@@ -5907,14 +6390,13 @@ function NewWarehouseOrderScreen({
       // Create one order with multiple items
       const orderDate = new Date().toISOString().split('T')[0];
       
-      const orderItems: InventoryOrderItem[] = validProducts.map(product => {
-        const quantity = parseFloat(product.quantity);
+      const orderItems: InventoryOrderItem[] = Array.from(selectedProducts.entries()).map(([productName, quantity]) => {
         return {
           id: '', // Backend will generate
-          itemId: '', // No item ID for free text products
-          itemName: product.name.trim(),
+          itemId: '', // No item ID for selected products
+          itemName: productName,
           quantity: quantity,
-          unit: '', // No unit for free text products
+          unit: '', // No unit for selected products
         };
       });
 
@@ -5930,7 +6412,7 @@ function NewWarehouseOrderScreen({
       await onSave([newOrder]);
 
       setSaving(false);
-      Alert.alert('הצלחה', `ההזמנה נוצרה בהצלחה עם ${validProducts.length} פריטים`, [
+      Alert.alert('הצלחה', `ההזמנה נוצרה בהצלחה עם ${selectedProducts.size} פריטים`, [
         { text: 'אישור', onPress: () => onCancel() }
       ]);
     } catch (err: any) {
@@ -5980,47 +6462,111 @@ function NewWarehouseOrderScreen({
           </Pressable>
         </View>
 
-        <View style={styles.simpleOrderList}>
-          {products.map((product, index) => (
-            <View key={product.id} style={styles.simpleOrderItem}>
-              <View style={styles.simpleOrderItemInfo}>
-                <TextInput
-                  style={styles.productNameInput}
-                  value={product.name}
-                  onChangeText={(text) => handleProductChange(product.id, 'name', text)}
-                  placeholder="שם המוצר"
-                  placeholderTextColor="#999"
-                />
-              </View>
-              <View style={styles.simpleOrderItemControls}>
-                <TextInput
-                  style={styles.simpleQuantityInput}
-                  value={product.quantity}
-                  onChangeText={(text) => handleProductChange(product.id, 'quantity', text)}
-                  placeholder="כמות"
-                  keyboardType="numeric"
-                  textAlign="center"
-                  placeholderTextColor="#999"
-                />
-                {products.length > 1 && (
-                  <Pressable
-                    onPress={() => handleRemoveProduct(product.id)}
-                    style={styles.removeProductButton}
-                  >
-                    <Text style={styles.removeProductButtonText}>×</Text>
-                  </Pressable>
-                )}
-              </View>
+        {/* Product Categories */}
+        <View style={styles.productCategoriesContainer}>
+          {PRODUCT_CATEGORIES.map((category) => (
+            <View key={category.name} style={styles.productCategory}>
+              <Pressable
+                style={styles.productCategoryHeader}
+                onPress={() => toggleCategory(category.name)}
+              >
+                <Text style={styles.productCategoryName}>{category.name}</Text>
+                <Text style={styles.productCategoryToggle}>
+                  {expandedCategory === category.name ? '▼' : '▶'}
+                </Text>
+              </Pressable>
+              {expandedCategory === category.name && (
+                <View style={styles.productOptionsGrid}>
+                  {category.products.map((product) => (
+                    <Pressable
+                      key={product}
+                      style={[
+                        styles.productOption,
+                        selectedProducts.has(product) && styles.productOptionSelected,
+                      ]}
+                      onPress={() => handleProductToggle(product)}
+                    >
+                      <Text style={styles.productOptionName}>{product}</Text>
+                      {selectedProducts.has(product) && (
+                        <View style={styles.productOptionQuantity}>
+                          <Pressable
+                            style={styles.quantityBtn}
+                            onPress={() =>
+                              handleQuantityChange(
+                                product,
+                                (selectedProducts.get(product) || 1) - 1
+                              )
+                            }
+                          >
+                            <Text style={styles.quantityBtnText}>−</Text>
+                          </Pressable>
+                          <TextInput
+                            style={styles.quantityInputSmall}
+                            value={String(selectedProducts.get(product) || 1)}
+                            onChangeText={(text) => {
+                              const val = parseInt(text) || 1;
+                              handleQuantityChange(product, val);
+                            }}
+                            keyboardType="numeric"
+                            textAlign="center"
+                          />
+                          <Pressable
+                            style={styles.quantityBtn}
+                            onPress={() =>
+                              handleQuantityChange(
+                                product,
+                                (selectedProducts.get(product) || 1) + 1
+                              )
+                            }
+                          >
+                            <Text style={styles.quantityBtnText}>+</Text>
+                          </Pressable>
+                        </View>
+                      )}
+                    </Pressable>
+                  ))}
+                </View>
+              )}
             </View>
           ))}
         </View>
 
-        <Pressable
-          onPress={handleAddProduct}
-          style={styles.addProductButton}
-        >
-          <Text style={styles.addProductButtonText}>+ הוסף פריט</Text>
-        </Pressable>
+        {/* Selected Products Summary */}
+        {selectedProducts.size > 0 && (
+          <View style={styles.selectedProductsSummary}>
+            <Text style={styles.selectedProductsTitle}>
+              פריטים שנבחרו ({selectedProducts.size})
+            </Text>
+            <View style={styles.selectedProductsList}>
+              {Array.from(selectedProducts.entries()).map(([productName, quantity]) => (
+                <View key={productName} style={styles.selectedProductItem}>
+                  <Text style={styles.selectedProductName}>{productName}</Text>
+                  <View style={styles.selectedProductControls}>
+                    <Pressable
+                      style={styles.quantityBtn}
+                      onPress={() => handleQuantityChange(productName, quantity - 1)}
+                    >
+                      <Text style={styles.quantityBtnText}>−</Text>
+                    </Pressable>
+                    <Text style={styles.selectedProductQuantity}>{quantity}</Text>
+                    <Pressable
+                      style={styles.quantityBtn}
+                      onPress={() => handleQuantityChange(productName, quantity + 1)}
+                    >
+                      <Text style={styles.quantityBtnText}>+</Text>
+                    </Pressable>
+                    <Pressable
+                      style={styles.removeSelectedBtn}
+                      onPress={() => handleProductToggle(productName)}
+                    >
+                      <Text style={styles.removeSelectedBtnText}>×</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
 
         <View style={styles.orderActions}>
           <Pressable
@@ -6051,7 +6597,9 @@ function NewWarehouseOrderScreen({
 
 type MaintenanceScreenProps = {
   units: MaintenanceUnit[];
+  isLoading: boolean;
   onSelectUnit: (unitId: string) => void;
+  onNewTask: (unitId: string) => void;
   onBack: () => void;
   safeAreaInsets: { top: number };
   statusBar: React.ReactElement;
@@ -6063,6 +6611,7 @@ type MaintenanceTasksScreenProps = {
   onSelectTask: (taskId: string) => void;
   onNewTask: () => void;
   onBack: () => void;
+  onTasksLoaded?: (unitId: string, tasks: MaintenanceTask[]) => void;
   safeAreaInsets: { top: number };
   statusBar: React.ReactElement;
 };
@@ -7020,24 +7569,50 @@ function ReportsScreen({
           <View style={[styles.card, { marginTop: 18 }]}>
             <View style={{ flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text style={[styles.title, { fontSize: 20 }]}>{reportTitle}</Text>
-              <Pressable
-                onPress={
-                  activeReport === 'orders'
-                    ? onOpenOrders
-                    : activeReport === 'inspections'
-                      ? onOpenExitInspections
-                      : activeReport === 'warehouse'
-                        ? onOpenWarehouse
-                        : activeReport === 'maintenance'
-                          ? onOpenMaintenance
-                          : activeReport === 'income-expenses'
-                            ? () => {}
-                            : onOpenAttendance
-                }
-                style={[styles.addOrderButton, { backgroundColor: '#0ea5e9' }]}
-              >
-                <Text style={styles.addOrderButtonText}>פתח מסך</Text>
-              </Pressable>
+              <View style={{ flexDirection: 'row-reverse', gap: 8 }}>
+                <Pressable
+                  onPress={async () => {
+                    const { exportOrdersReport, exportInspectionsReport, exportWarehouseReport, exportMaintenanceReport, exportAttendanceReport } = await import('./utils/excelExport')
+                    if (activeReport === 'orders') {
+                      await exportOrdersReport(ordersByUnitReport, orders, formatMoney)
+                    } else if (activeReport === 'inspections') {
+                      await exportInspectionsReport(inspectionsByUnit, missions)
+                    } else if (activeReport === 'warehouse') {
+                      await exportWarehouseReport(warehouseInventoryByWarehouse, inventoryOrdersSorted)
+                    } else if (activeReport === 'maintenance') {
+                      await exportMaintenanceReport(
+                        maintenanceTasksByUnit,
+                        maintenanceTasksEffective,
+                        resolveAssignee,
+                        normalizeMaintenanceStatus,
+                      )
+                    } else if (activeReport === 'attendance') {
+                      await exportAttendanceReport(attendancePeriodsByEmployee, attendanceLogs, normalizeClock)
+                    }
+                  }}
+                  style={[styles.addOrderButton, { backgroundColor: '#22c55e' }]}
+                >
+                  <Text style={styles.addOrderButtonText}>📥 ייצא ל-Excel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={
+                    activeReport === 'orders'
+                      ? onOpenOrders
+                      : activeReport === 'inspections'
+                        ? onOpenExitInspections
+                        : activeReport === 'warehouse'
+                          ? onOpenWarehouse
+                          : activeReport === 'maintenance'
+                            ? onOpenMaintenance
+                            : activeReport === 'income-expenses'
+                              ? () => {}
+                              : onOpenAttendance
+                  }
+                  style={[styles.addOrderButton, { backgroundColor: '#0ea5e9' }]}
+                >
+                  <Text style={styles.addOrderButtonText}>פתח מסך</Text>
+                </Pressable>
+              </View>
             </View>
 
             {activeReport === 'orders' ? (
@@ -7750,6 +8325,7 @@ type EmployeeManagementScreenProps = {
 };
 
 function EmployeeManagementScreen({
+  userName,
   employees,
   attendanceLogs,
   onBack,
@@ -7757,9 +8333,78 @@ function EmployeeManagementScreen({
   safeAreaInsets,
   statusBar,
 }: EmployeeManagementScreenProps) {
+  const isAdmin = userName.toLowerCase() === 'admin';
   const [editingWage, setEditingWage] = useState<string | null>(null);
   const [wageInput, setWageInput] = useState<string>('');
   const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  
+  useEffect(() => {
+    if (isAdmin) {
+      loadPendingApprovals();
+    }
+  }, [isAdmin]);
+  
+  const loadPendingApprovals = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/users/pending-approvals`);
+      if (!res.ok) {
+        console.error('Failed to load pending approvals:', res.status);
+        return;
+      }
+      const data = await res.json();
+      setPendingApprovals(data || []);
+    } catch (err) {
+      console.error('Error loading pending approvals:', err);
+    }
+  };
+  
+  const handleApproveUser = async (userId: string) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/users/${userId}/approve`, {
+        method: 'PATCH',
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+        Alert.alert('שגיאה', errorData.detail || 'לא ניתן לאשר את המשתמש');
+        return;
+      }
+      await loadPendingApprovals();
+      Alert.alert('הצלחה', 'המשתמש אושר בהצלחה');
+    } catch (err: any) {
+      Alert.alert('שגיאה', err.message || 'אירעה שגיאה באישור המשתמש');
+    }
+  };
+  
+  const handleRejectUser = async (userId: string) => {
+    Alert.alert(
+      'דחיית משתמש',
+      'האם אתה בטוח שברצונך לדחות את המשתמש? פעולה זו תמחק את המשתמש.',
+      [
+        { text: 'ביטול', style: 'cancel' },
+        {
+          text: 'דחה',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const res = await fetch(`${API_BASE_URL}/api/users/${userId}/reject`, {
+                method: 'PATCH',
+              });
+              if (!res.ok) {
+                const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+                Alert.alert('שגיאה', errorData.detail || 'לא ניתן לדחות את המשתמש');
+                return;
+              }
+              await loadPendingApprovals();
+              Alert.alert('הצלחה', 'המשתמש נדחה והוסר בהצלחה');
+            } catch (err: any) {
+              Alert.alert('שגיאה', err.message || 'אירעה שגיאה בדחיית המשתמש');
+            }
+          },
+        },
+      ]
+    );
+  };
 
   const getFilteredLogs = (employeeUsername: string) => {
     return attendanceLogs.filter((log: any) => log.employee === employeeUsername);
@@ -7878,6 +8523,52 @@ function EmployeeManagementScreen({
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.title}>ניהול עובדים</Text>
+
+        {isAdmin && pendingApprovals.length > 0 && (
+          <View style={styles.approvalsSection}>
+            <Text style={styles.approvalsTitle}>אישורי כניסה למערכת</Text>
+            {pendingApprovals.map(approval => (
+              <View key={approval.id} style={styles.approvalCard}>
+                <View style={styles.approvalHeader}>
+                  <View style={styles.approvalAvatar}>
+                    {approval.image_url ? (
+                      <Image source={{ uri: approval.image_url }} style={styles.approvalAvatarImage} />
+                    ) : (
+                      <View style={styles.approvalAvatarPlaceholder}>
+                        <Text style={styles.approvalAvatarIcon}>👤</Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.approvalInfo}>
+                    <Text style={styles.approvalName}>{approval.username}</Text>
+                    {approval.role && (
+                      <Text style={styles.approvalRole}>{approval.role}</Text>
+                    )}
+                    {approval.created_at && (
+                      <Text style={styles.approvalDate}>
+                        נרשם: {new Date(approval.created_at).toLocaleDateString('he-IL')}
+                      </Text>
+                    )}
+                  </View>
+                </View>
+                <View style={styles.approvalActions}>
+                  <Pressable
+                    style={styles.approvalApprove}
+                    onPress={() => handleApproveUser(approval.id)}
+                  >
+                    <Text style={styles.approvalButtonText}>✓ אישר</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.approvalReject}
+                    onPress={() => handleRejectUser(approval.id)}
+                  >
+                    <Text style={styles.approvalButtonText}>✗ דחה</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
 
         <View style={styles.employeeGrid}>
           {employeesWithStats.map(emp => (
@@ -8284,6 +8975,7 @@ function MaintenanceScreen({
   units,
   isLoading,
   onSelectUnit,
+  onNewTask,
   onBack,
   safeAreaInsets,
   statusBar,
@@ -8300,9 +8992,86 @@ function MaintenanceScreen({
   };
 
   const getUnitStats = (unit: MaintenanceUnit) => {
-    const open = unit.tasks.filter(t => t.status === 'פתוח').length;
-    const closed = unit.tasks.filter(t => t.status === 'סגור').length;
-    return { open, closed, total: unit.tasks.length };
+    const today = new Date().toISOString().split('T')[0];
+    // Use stats if available (lightweight mode), but we still need to calculate today's stats from tasks
+    const open = unit.stats?.open ?? unit.tasks.filter(t => t.status === 'פתוח').length;
+    const closed = unit.stats?.closed ?? unit.tasks.filter(t => t.status === 'סגור').length;
+    const total = unit.stats?.total ?? unit.tasks.length;
+    // Calculate today's stats from tasks (not available in lightweight stats)
+    const openedToday = unit.tasks.filter(t => t.status === 'פתוח' && t.createdDate === today).length;
+    const closedToday = unit.tasks.filter(t => t.status === 'סגור' && t.createdDate === today).length;
+    return { open, closed, total, openedToday, closedToday };
+  };
+
+  const renderUnitCard = (unit: MaintenanceUnit) => {
+    const stats = getUnitStats(unit);
+    // Check if data has been loaded (any unit has tasks or we've attempted to load)
+    const hasLoadedData = units.some(u => u.tasks.length > 0) || !isLoading;
+    return (
+      <Pressable
+        key={unit.id}
+        onPress={() => onSelectUnit(unit.id)}
+        style={styles.unitCard}
+      >
+        <View style={styles.unitCardHeader}>
+          <View style={styles.unitIcon}>
+            <Text style={styles.unitIconText}>
+              {unit.type === 'יחידה' ? '🏠' : '🏡'}
+            </Text>
+          </View>
+          <Pressable
+            style={styles.maintenanceUnitOpenTaskButton}
+            onPress={() => {
+              onNewTask(unit.id);
+            }}
+          >
+            <Text style={styles.maintenanceUnitOpenTaskButtonText}>פתח קריאה</Text>
+          </Pressable>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.unitCardName}>{unit.name}</Text>
+            <Text style={styles.unitCardType}>{unit.type}</Text>
+          </View>
+        </View>
+        <View style={styles.unitStats}>
+          {isLoading && !hasLoadedData ? (
+            <View style={[styles.unitStatItem, { width: '100%', alignItems: 'center', paddingVertical: 8 }]}>
+              <ActivityIndicator size="small" color="#3b82f6" />
+            </View>
+          ) : (
+            <>
+              <View style={styles.unitStatItem}>
+                <Text style={styles.unitStatValue}>{stats.total}</Text>
+                <Text style={styles.unitStatLabel}>סה״כ קריאות</Text>
+              </View>
+              <View style={styles.unitStatItem}>
+                <Text style={[styles.unitStatValue, { color: '#f59e0b' }]}>
+                  {stats.open}
+                </Text>
+                <Text style={styles.unitStatLabel}>קריאות פתוחות</Text>
+              </View>
+              <View style={styles.unitStatItem}>
+                <Text style={[styles.unitStatValue, { color: '#22c55e' }]}>
+                  {stats.closed}
+                </Text>
+                <Text style={styles.unitStatLabel}>קריאות סגורות</Text>
+              </View>
+              <View style={styles.unitStatItem}>
+                <Text style={[styles.unitStatValue, { color: '#3b82f6' }]}>
+                  {stats.openedToday || 0}
+                </Text>
+                <Text style={styles.unitStatLabel}>נפתח היום</Text>
+              </View>
+              <View style={styles.unitStatItem}>
+                <Text style={[styles.unitStatValue, { color: '#8b5cf6' }]}>
+                  {stats.closedToday || 0}
+                </Text>
+                <Text style={styles.unitStatLabel}>נסגר היום</Text>
+              </View>
+            </>
+          )}
+        </View>
+      </Pressable>
+    );
   };
 
   return (
@@ -8326,56 +9095,7 @@ function MaintenanceScreen({
         </View>
 
         <View style={styles.unitsGrid}>
-          {units.map(unit => {
-            const stats = getUnitStats(unit);
-            // Check if data has been loaded (any unit has tasks or we've attempted to load)
-            const hasLoadedData = units.some(u => u.tasks.length > 0) || !isLoading;
-            return (
-              <Pressable
-                key={unit.id}
-                onPress={() => onSelectUnit(unit.id)}
-                style={styles.unitCard}
-              >
-                <View style={styles.unitCardHeader}>
-                  <View style={styles.unitIcon}>
-                    <Text style={styles.unitIconText}>
-                      {unit.type === 'יחידה' ? '🏠' : '🏡'}
-                    </Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.unitCardName}>{unit.name}</Text>
-                    <Text style={styles.unitCardType}>{unit.type}</Text>
-                  </View>
-                </View>
-                <View style={styles.unitStats}>
-                  {isLoading && !hasLoadedData ? (
-                    <View style={[styles.unitStatItem, { width: '100%', alignItems: 'center', paddingVertical: 8 }]}>
-                      <ActivityIndicator size="small" color="#3b82f6" />
-                    </View>
-                  ) : (
-                    <>
-                      <View style={styles.unitStatItem}>
-                        <Text style={styles.unitStatValue}>{stats.total}</Text>
-                        <Text style={styles.unitStatLabel}>סה״כ משימות</Text>
-                      </View>
-                      <View style={styles.unitStatItem}>
-                        <Text style={[styles.unitStatValue, { color: '#f59e0b' }]}>
-                          {stats.open}
-                        </Text>
-                        <Text style={styles.unitStatLabel}>פתוחות</Text>
-                      </View>
-                      <View style={styles.unitStatItem}>
-                        <Text style={[styles.unitStatValue, { color: '#22c55e' }]}>
-                          {stats.closed}
-                        </Text>
-                        <Text style={styles.unitStatLabel}>סגורות</Text>
-                      </View>
-                    </>
-                  )}
-                </View>
-              </Pressable>
-            );
-          })}
+          {units.map(renderUnitCard)}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -8388,9 +9108,71 @@ function MaintenanceTasksScreen({
   onSelectTask,
   onNewTask,
   onBack,
+  onTasksLoaded,
   safeAreaInsets,
   statusBar,
 }: MaintenanceTasksScreenProps) {
+  const [filter, setFilter] = useState<'all' | 'open' | 'closed'>('all');
+  const [loadedUnit, setLoadedUnit] = useState<MaintenanceUnit | null>(unit);
+  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
+  
+  // Load tasks when screen opens (like PWA does)
+  useEffect(() => {
+    const loadTasks = async () => {
+      if (!unit || !unit.id) return;
+      
+      setIsLoadingTasks(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks`);
+        if (!res.ok) {
+          setIsLoadingTasks(false);
+          return;
+        }
+        const data = (await res.json()) || [];
+        
+        const unitTasks = data
+          .filter((t: any) => {
+            const tUnitId = normalizeMaintenanceUnitId(t.unit_id || t.unitId || t.unit);
+            return tUnitId === unit.id;
+          })
+          .map((t: any) => ({
+            id: (t.id || `task-${Date.now()}`).toString(),
+            unitId: unit.id,
+            title: (t.title || '').toString(),
+            description: (t.description || '').toString(),
+            status: (t.status || 'פתוח') as MaintenanceStatus,
+            createdDate: (t.created_date || t.createdDate || new Date().toISOString().split('T')[0]).toString(),
+            assignedTo: (t.assigned_to || t.assignedTo || undefined)?.toString(),
+            imageUri: (t.image_uri || t.imageUri || undefined)?.toString(),
+            room: (t.room || undefined)?.toString(),
+            media: null,
+          }));
+        
+        unitTasks.sort((a: MaintenanceTask, b: MaintenanceTask) => 
+          (b.createdDate || '').localeCompare(a.createdDate || '')
+        );
+        
+        const updatedUnit = {
+          ...unit,
+          tasks: unitTasks,
+        };
+        
+        setLoadedUnit(updatedUnit);
+        
+        // Notify parent to update maintenanceUnits state
+        if (onTasksLoaded) {
+          onTasksLoaded(unit.id, unitTasks);
+        }
+      } catch (err) {
+        console.error('Error loading tasks:', err);
+      } finally {
+        setIsLoadingTasks(false);
+      }
+    };
+    
+    loadTasks();
+  }, [unit?.id]);
+  
   const getStatusColor = (status: MaintenanceStatus) => {
     switch (status) {
       case 'פתוח':
@@ -8401,6 +9183,8 @@ function MaintenanceTasksScreen({
         return '#64748b';
     }
   };
+  
+  const displayUnit = loadedUnit || unit;
 
   return (
     <SafeAreaView
@@ -8415,26 +9199,64 @@ function MaintenanceTasksScreen({
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.warehouseHeader}>
           <View>
-            <Text style={styles.title}>{unit.name}</Text>
+            <Text style={styles.title}>{displayUnit.name}</Text>
             <Text style={styles.subtitle}>
-              משימות תחזוקה - {unit.tasks.length} משימות
+              משימות תחזוקה - {displayUnit.tasks.length} משימות
             </Text>
           </View>
         </View>
 
         <View style={styles.ordersHeaderRow}>
-          <Text style={styles.sectionTitle}>משימות תחזוקה</Text>
-          <Pressable onPress={onNewTask} style={styles.addOrderButton}>
-            <Text style={styles.addOrderButtonText}>+ משימה חדשה</Text>
-          </Pressable>
+          <View style={styles.maintenanceTasksFilter}>
+            <Pressable
+              style={[styles.maintenanceTasksFilterButton, filter === 'closed' && styles.maintenanceTasksFilterButtonActive]}
+              onPress={() => setFilter('closed')}
+            >
+              <Text style={[styles.maintenanceTasksFilterButtonText, filter === 'closed' && styles.maintenanceTasksFilterButtonTextActive]}>
+                קריאות סגורות
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.maintenanceTasksFilterButton, filter === 'open' && styles.maintenanceTasksFilterButtonActive]}
+              onPress={() => setFilter('open')}
+            >
+              <Text style={[styles.maintenanceTasksFilterButtonText, filter === 'open' && styles.maintenanceTasksFilterButtonTextActive]}>
+                קריאות פתוחות
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.maintenanceTasksFilterButton, filter === 'all' && styles.maintenanceTasksFilterButtonActive]}
+              onPress={() => setFilter('all')}
+            >
+              <Text style={[styles.maintenanceTasksFilterButtonText, filter === 'all' && styles.maintenanceTasksFilterButtonTextActive]}>
+                סה״כ קריאות
+              </Text>
+            </Pressable>
+          </View>
         </View>
 
-        {unit.tasks.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>אין משימות תחזוקה ליחידה זו</Text>
-          </View>
-        ) : (
-          unit.tasks.map(task => (
+        {(() => {
+          const today = new Date().toISOString().split('T')[0];
+          
+          const filteredTasks = filter === 'all' 
+            ? displayUnit.tasks 
+            : filter === 'open' 
+            ? displayUnit.tasks.filter(t => t.status === 'פתוח')
+            : displayUnit.tasks.filter(t => t.status === 'סגור');
+          
+          // Separate tasks into "opened today" and "not today"
+          const tasksOpenedToday = filteredTasks.filter(t => t.createdDate === today);
+          const tasksNotToday = filteredTasks.filter(t => t.createdDate !== today);
+          
+          if (filteredTasks.length === 0) {
+            return (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateText}>אין משימות תחזוקה ליחידה זו</Text>
+              </View>
+            );
+          }
+          
+          const renderTaskCard = (task: MaintenanceTask) => (
             <Pressable
               key={task.id}
               onPress={() => onSelectTask(task.id)}
@@ -8471,6 +9293,13 @@ function MaintenanceTasksScreen({
                       {task.status}
                     </Text>
                   </View>
+                  {task.room && (
+                    <View style={styles.taskRoomBadge}>
+                      <Text style={styles.taskRoomText}>
+                        חדר {task.room}
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </View>
               {task.imageUri && (
@@ -8479,8 +9308,30 @@ function MaintenanceTasksScreen({
                 </View>
               )}
             </Pressable>
-          ))
-        )}
+          );
+          
+          return (
+            <>
+              {tasksOpenedToday.length > 0 && (
+                <>
+                  <View style={styles.tasksSectionHeader}>
+                    <Text style={styles.tasksSectionTitle}>נפתחו היום</Text>
+                  </View>
+                  {tasksOpenedToday.map(renderTaskCard)}
+                </>
+              )}
+              
+              {tasksNotToday.length > 0 && (
+                <>
+                  <View style={styles.tasksSectionHeader}>
+                    <Text style={styles.tasksSectionTitle}>לא מהיום</Text>
+                  </View>
+                  {tasksNotToday.map(renderTaskCard)}
+                </>
+              )}
+            </>
+          );
+        })()}
       </ScrollView>
     </SafeAreaView>
   );
@@ -8504,12 +9355,119 @@ function MaintenanceTaskDetailScreen({
   const [isUploadingEdit, setIsUploadingEdit] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [useWebViewForVideo, setUseWebViewForVideo] = useState(false);
+  const [fullTask, setFullTask] = useState<MaintenanceTask>(task);
+  const [isLoadingFullTask, setIsLoadingFullTask] = useState<boolean>(true);
+
+  // Always fetch full task with image_uri when opening task detail
+  useEffect(() => {
+    if (task.id) {
+      setIsLoadingFullTask(true);
+      console.log('[TaskDetail] Fetching full task for:', task.id);
+      // Always fetch full task data including image_uri/video when opening detail
+      fetch(`${API_BASE_URL}/api/maintenance/tasks/${encodeURIComponent(task.id)}`)
+        .then(res => {
+          console.log('[TaskDetail] Fetch response status:', res.status);
+          if (res.ok) {
+            return res.json();
+          }
+          console.error('[TaskDetail] Fetch failed:', res.status);
+          return null;
+        })
+        .then((fullTaskData: any) => {
+          console.log('[TaskDetail] Full task data received:', fullTaskData ? 'yes' : 'no');
+          if (fullTaskData) {
+            const imageUri = fullTaskData.image_uri || fullTaskData.imageUri;
+            const closingImageUri = fullTaskData.closing_image_uri || fullTaskData.closingImageUri;
+            console.log('[TaskDetail] ==========================================');
+            console.log('[TaskDetail] IMAGE/VIDEO URL:', imageUri || 'NONE');
+            console.log('[TaskDetail] CLOSING IMAGE/VIDEO URL:', closingImageUri || 'NONE');
+            console.log('[TaskDetail] Full URL length:', imageUri ? imageUri.length : 0);
+            if (imageUri) {
+              const isVideo = imageUri.startsWith('data:video/') || 
+                             imageUri.includes('.mp4') || 
+                             imageUri.includes('.mov') || 
+                             imageUri.includes('/vidoes/') || 
+                             imageUri.includes('/storage/');
+              console.log('[TaskDetail] Type:', isVideo ? 'VIDEO' : 'IMAGE');
+              if (imageUri.startsWith('http')) {
+                console.log('[TaskDetail] URL Type: HTTP/HTTPS (Storage URL)');
+              } else if (imageUri.startsWith('data:')) {
+                console.log('[TaskDetail] URL Type: Data URI (Base64)');
+                console.log('[TaskDetail] Data URI prefix:', imageUri.substring(0, 50));
+              } else {
+                console.log('[TaskDetail] URL Type: Unknown format');
+              }
+            }
+            console.log('[TaskDetail] ==========================================');
+            const updatedTask: MaintenanceTask = {
+              ...task,
+              // Always use the fetched image_uri (could be image or video) - don't fallback to task.imageUri if it's empty
+              imageUri: imageUri || undefined,
+              closingImageUri: closingImageUri || undefined,
+              // Also update other fields in case they changed
+              title: fullTaskData.title || task.title,
+              description: fullTaskData.description || task.description,
+              status: (fullTaskData.status || task.status) as MaintenanceStatus,
+              createdDate: fullTaskData.created_date || fullTaskData.createdDate || task.createdDate,
+              assignedTo: fullTaskData.assigned_to || fullTaskData.assignedTo || task.assignedTo,
+              room: fullTaskData.room || task.room,
+            };
+            console.log('[TaskDetail] Setting fullTask with imageUri:', updatedTask.imageUri ? 'YES' : 'NO');
+            if (updatedTask.imageUri) {
+              console.log('[TaskDetail] Final imageUri value:', updatedTask.imageUri);
+            }
+            setFullTask(updatedTask);
+            setIsLoadingFullTask(false);
+            // Don't call onUpdateTask here - it causes loadMaintenanceUnits which can close the screen
+            // The parent state will be updated when the user actually makes changes
+          } else {
+            // If fetch fails, use the task we have
+            console.log('[TaskDetail] No data received, using existing task');
+            setFullTask(task);
+            setIsLoadingFullTask(false);
+          }
+        })
+        .catch(err => {
+          console.error('[TaskDetail] Error fetching full task:', err);
+          // On error, use the task we have
+          setFullTask(task);
+          setIsLoadingFullTask(false);
+        });
+    } else {
+      setFullTask(task);
+      setIsLoadingFullTask(false);
+    }
+  }, [task.id]); // Only depend on task.id, so it fetches when task changes
+
+  // Log image/video URL whenever fullTask.imageUri changes
+  useEffect(() => {
+    if (fullTask.imageUri) {
+      console.log('[TaskDetail] ==========================================');
+      console.log('[TaskDetail] CURRENT IMAGE/VIDEO URL:', fullTask.imageUri);
+      console.log('[TaskDetail] URL length:', fullTask.imageUri.length);
+      const isVideo = fullTask.imageUri.startsWith('data:video/') || 
+                     fullTask.imageUri.includes('.mp4') || 
+                     fullTask.imageUri.includes('.mov') || 
+                     fullTask.imageUri.includes('/vidoes/') || 
+                     fullTask.imageUri.includes('/storage/');
+      console.log('[TaskDetail] Type:', isVideo ? 'VIDEO' : 'IMAGE');
+      if (fullTask.imageUri.startsWith('http')) {
+        console.log('[TaskDetail] URL Type: HTTP/HTTPS (Storage URL)');
+      } else if (fullTask.imageUri.startsWith('data:')) {
+        console.log('[TaskDetail] URL Type: Data URI (Base64)');
+        console.log('[TaskDetail] Data URI MIME type:', fullTask.imageUri.substring(5, fullTask.imageUri.indexOf(';')));
+      }
+      console.log('[TaskDetail] ==========================================');
+    } else {
+      console.log('[TaskDetail] No image/video URL available');
+    }
+  }, [fullTask.imageUri]);
 
   // Reset WebView fallback when task changes
   useEffect(() => {
     setUseWebViewForVideo(false);
     setVideoError(null);
-  }, [task.id, task.imageUri]);
+  }, [fullTask.id, fullTask.imageUri]);
 
   // Helper function to upload file to storage (like PWA)
   const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
@@ -8792,21 +9750,21 @@ function MaintenanceTaskDetailScreen({
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.taskDetailCard}>
           <View style={styles.taskDetailHeader}>
-            <Text style={styles.taskDetailTitle}>{task.title}</Text>
+            <Text style={styles.taskDetailTitle}>{fullTask.title}</Text>
             <View style={styles.taskDetailBadges}>
               <View
                 style={[
                   styles.taskStatusBadge,
-                  { backgroundColor: getStatusColor(task.status) + '22' },
+                  { backgroundColor: getStatusColor(fullTask.status) + '22' },
                 ]}
               >
                 <Text
                   style={[
                     styles.taskStatusText,
-                    { color: getStatusColor(task.status) },
+                    { color: getStatusColor(fullTask.status) },
                   ]}
                 >
-                  {task.status}
+                  {fullTask.status}
                 </Text>
               </View>
             </View>
@@ -8819,69 +9777,90 @@ function MaintenanceTaskDetailScreen({
 
           <View style={styles.taskDetailSection}>
             <Text style={styles.taskDetailLabel}>תאריך יצירה:</Text>
-            <Text style={styles.taskDetailValue}>{task.createdDate}</Text>
+            <Text style={styles.taskDetailValue}>{fullTask.createdDate}</Text>
           </View>
 
-          {task.assignedTo && (
+          {fullTask.assignedTo && (
             <View style={styles.taskDetailSection}>
               <Text style={styles.taskDetailLabel}>מוקצה ל:</Text>
-              <Text style={styles.taskDetailValue}>{resolveAssignee(task.assignedTo)}</Text>
+              <Text style={styles.taskDetailValue}>{resolveAssignee(fullTask.assignedTo)}</Text>
             </View>
           )}
 
           <View style={styles.taskDetailSection}>
             <Text style={styles.taskDetailLabel}>תיאור:</Text>
-            <Text style={styles.taskDetailDescription}>{task.description}</Text>
+            <Text style={styles.taskDetailDescription}>{fullTask.description}</Text>
           </View>
 
-          {/* Display image/video if exists (for both open and closed tasks) */}
-          {task.imageUri && (
+          {/* Loading indicator while fetching full task */}
+          {isLoadingFullTask && (
             <View style={styles.taskDetailSection}>
+              <ActivityIndicator size="small" color="#3b82f6" />
+              <Text style={styles.taskDetailDescription}>טוען תמונה/וידאו...</Text>
+            </View>
+          )}
+
+
+          {/* Display image/video if exists (for both open and closed tasks) */}
+          {!isLoadingFullTask && fullTask.imageUri ? (
+            <View style={styles.taskDetailSection}>
+              {(() => {
+                console.log('[TaskDetail] Rendering image/video with URL:', fullTask.imageUri);
+                const isVideo = fullTask.imageUri.startsWith('data:video/') || 
+                               fullTask.imageUri.includes('.mp4') || 
+                               fullTask.imageUri.includes('.mov') || 
+                               fullTask.imageUri.includes('/vidoes/') || 
+                               fullTask.imageUri.includes('/storage/');
+                console.log('[TaskDetail] Rendering as:', isVideo ? 'VIDEO' : 'IMAGE');
+                return null;
+              })()}
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <Text style={styles.taskDetailLabel}>
-                  {task.imageUri.startsWith('data:video/') || task.imageUri.includes('.mp4') || task.imageUri.includes('.mov') || task.imageUri.includes('/vidoes/') || task.imageUri.includes('/storage/')
-                    ? 'וידאו:' 
-                    : 'תמונה:'}
+                  {fullTask.imageUri.startsWith('data:video/') || fullTask.imageUri.includes('.mp4') || fullTask.imageUri.includes('.mov') || fullTask.imageUri.includes('/vidoes/') || fullTask.imageUri.includes('/storage/')
+                    ? 'וידאו פתיחה:' 
+                    : 'תמונה פתיחה:'}
                 </Text>
-                <Pressable 
-                  onPress={() => {
-                    setEditMediaUri(task.imageUri);
-                    setHasNewMedia(false); // Reset flag when opening with existing media
-                    setShowEditMediaModal(true);
-                  }}
-                  style={styles.editMediaButton}
-                >
-                  <Text style={styles.editMediaButtonText}>ערוך/העלה</Text>
-                </Pressable>
+                {fullTask.status !== 'סגור' && (
+                  <Pressable 
+                    onPress={() => {
+                      setEditMediaUri(fullTask.imageUri);
+                      setHasNewMedia(false); // Reset flag when opening with existing media
+                      setShowEditMediaModal(true);
+                    }}
+                    style={styles.editMediaButton}
+                  >
+                    <Text style={styles.editMediaButtonText}>ערוך/העלה</Text>
+                  </Pressable>
+                )}
               </View>
               <View style={styles.taskImageContainer}>
-                {task.imageUri.startsWith('data:video/') || task.imageUri.includes('.mp4') || task.imageUri.includes('.mov') || task.imageUri.includes('/storage/') || task.imageUri.includes('/vidoes/') ? (
+                {fullTask.imageUri.startsWith('data:video/') || fullTask.imageUri.includes('.mp4') || fullTask.imageUri.includes('.mov') || fullTask.imageUri.includes('/storage/') || fullTask.imageUri.includes('/vidoes/') ? (
                   // For HTTP URLs (storage), use react-native-video directly
-                  task.imageUri.startsWith('http') ? (
+                  fullTask.imageUri.startsWith('http') ? (
                     <Video
-                      source={{ uri: task.imageUri }}
+                      source={{ uri: fullTask.imageUri }}
                       style={styles.taskDetailImage}
                       controls
                       resizeMode="contain"
                       paused={false}
                       onError={(error) => {
-                        console.error('Video playback error:', error);
+                        console.error('[TaskDetail] Video playback error:', error, 'URL:', fullTask.imageUri);
                         setVideoError('לא ניתן לנגן את הוידאו');
                       }}
                       onLoad={() => {
                         setVideoError(null);
-                        console.log('Video loaded successfully from storage');
+                        console.log('[TaskDetail] Video loaded successfully from storage:', fullTask.imageUri);
                       }}
                       onLoadStart={() => {
                         setVideoError(null);
-                        console.log('Video loading started');
+                        console.log('[TaskDetail] Video loading started:', fullTask.imageUri);
                       }}
                     />
-                  ) : task.imageUri.startsWith('data:') && !useWebViewForVideo ? (
+                  ) : fullTask.imageUri.startsWith('data:') && !useWebViewForVideo ? (
                     // For data URIs, try react-native-video first, fallback to WebView if it fails
                     <Video
                       source={{ 
-                        uri: task.imageUri,
+                        uri: fullTask.imageUri,
                         type: 'mp4',
                       }}
                       style={styles.taskDetailImage}
@@ -8894,14 +9873,14 @@ function MaintenanceTaskDetailScreen({
                       }}
                       onLoad={() => {
                         setVideoError(null);
-                        console.log('Video loaded successfully with react-native-video');
+                        console.log('[TaskDetail] Video loaded successfully with react-native-video:', fullTask.imageUri);
                       }}
                       onLoadStart={() => {
                         setVideoError(null);
-                        console.log('Video loading started');
+                        console.log('[TaskDetail] Video loading started:', fullTask.imageUri);
                       }}
                     />
-                  ) : task.imageUri.startsWith('data:') && useWebViewForVideo ? (
+                  ) : fullTask.imageUri.startsWith('data:') && useWebViewForVideo ? (
                     // Fallback to WebView if react-native-video fails
                     <WebView
                       source={{ html: `
@@ -8924,7 +9903,7 @@ function MaintenanceTaskDetailScreen({
                           </head>
                           <body>
                             <video controls autoplay playsinline>
-                              <source src="${task.imageUri.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" type="video/mp4">
+                              <source src="${fullTask.imageUri.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" type="video/mp4">
                             </video>
                           </body>
                         </html>
@@ -8936,52 +9915,134 @@ function MaintenanceTaskDetailScreen({
                       mediaPlaybackRequiresUserAction={false}
                       onError={(syntheticEvent) => {
                         const { nativeEvent } = syntheticEvent;
-                        console.error('WebView error:', nativeEvent);
+                        console.error('[TaskDetail] WebView error:', nativeEvent, 'URL:', fullTask.imageUri);
                         setVideoError('שגיאה בטעינת הוידאו');
                       }}
                       onLoadEnd={() => {
-                        console.log('WebView loaded');
+                        console.log('[TaskDetail] WebView loaded:', fullTask.imageUri);
                         setVideoError(null);
                       }}
                     />
                   ) : (
                     // Use react-native-video for HTTP URLs and file URIs
                     <Video
-                      source={{ uri: task.imageUri }}
+                      source={{ uri: fullTask.imageUri }}
                       style={styles.taskDetailImage}
                       controls
                       resizeMode="contain"
                       paused={false}
                       onError={(error) => {
-                        console.error('Video playback error:', error);
+                        console.error('[TaskDetail] Video playback error:', error, 'URL:', fullTask.imageUri);
                         setVideoError('לא ניתן לנגן את הוידאו');
                       }}
                       onLoad={() => {
                         setVideoError(null);
-                        console.log('Video loaded successfully');
+                        console.log('[TaskDetail] Video loaded successfully:', fullTask.imageUri);
                       }}
                       onLoadStart={() => {
                         setVideoError(null);
-                        console.log('Video loading started');
+                        console.log('[TaskDetail] Video loading started:', fullTask.imageUri);
                       }}
                     />
                   )
                 ) : (
                   <Image
-                    source={{ uri: task.imageUri }}
+                    source={{ uri: fullTask.imageUri }}
                     style={styles.taskDetailImage}
                     resizeMode="contain"
-                    onError={() => {
+                    onLoad={() => {
+                      console.log('[TaskDetail] Image loaded successfully:', fullTask.imageUri);
+                    }}
+                    onError={(error) => {
+                      console.error('[TaskDetail] Image error:', error, 'URL:', fullTask.imageUri);
                       Alert.alert('שגיאה', 'לא ניתן לטעון את התמונה. נסה שוב או החלף את הקובץ.');
                     }}
                   />
                 )}
               </View>
-              {task.status === 'סגור' && (
-                <View style={styles.taskClosedIndicator}>
-                  <Text style={styles.taskClosedIndicatorText}>✓ משימה סגורה</Text>
-                </View>
+              {fullTask.status !== 'סגור' && (
+                <Pressable
+                  onPress={() => {
+                    setEditMediaUri(fullTask.imageUri || null);
+                    setShowEditMediaModal(true);
+                  }}
+                  style={styles.editMediaButton}
+                >
+                  <Text style={styles.editMediaButtonText}>ערוך/העלה</Text>
+                </Pressable>
               )}
+            </View>
+          ) : !isLoadingFullTask && !fullTask.imageUri ? (
+            <View style={styles.taskDetailSection}>
+              {(() => {
+                console.log('[TaskDetail] No imageUri available for task:', task.id);
+                return null;
+              })()}
+              <Text style={[styles.taskDetailDescription, { color: '#999', fontStyle: 'italic', textAlign: 'center' }]}>
+                אין תמונה או וידאו פתיחה
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Closing Media (closingImageUri) - show only for closed tasks */}
+          {fullTask.status === 'סגור' && fullTask.closingImageUri && (
+            <View style={styles.taskDetailSection}>
+              <View style={styles.taskMediaHeader}>
+                <Text style={styles.taskMediaLabel}>
+                  {fullTask.closingImageUri.startsWith('data:video/') || fullTask.closingImageUri.includes('.mp4') || fullTask.closingImageUri.includes('.mov') || fullTask.closingImageUri.includes('/vidoes/') || fullTask.closingImageUri.includes('/storage/') ? 'וידאו סגירה:' : 'תמונה סגירה:'}
+                </Text>
+              </View>
+              <View style={styles.taskImageContainer}>
+                {fullTask.closingImageUri.startsWith('data:video/') || fullTask.closingImageUri.includes('.mp4') || fullTask.closingImageUri.includes('.mov') || fullTask.closingImageUri.includes('/storage/') || fullTask.closingImageUri.includes('/vidoes/') ? (
+                  fullTask.closingImageUri.startsWith('http') ? (
+                    <Video
+                      source={{ uri: fullTask.closingImageUri }}
+                      style={styles.taskDetailImage}
+                      controls
+                      resizeMode="contain"
+                      paused={false}
+                      onError={(error) => {
+                        console.error('[TaskDetail] Closing video playback error:', error, 'URL:', fullTask.closingImageUri);
+                      }}
+                      onLoad={() => {
+                        console.log('[TaskDetail] Closing video loaded successfully:', fullTask.closingImageUri);
+                      }}
+                    />
+                  ) : (
+                    <Video
+                      source={{ uri: fullTask.closingImageUri }}
+                      style={styles.taskDetailImage}
+                      controls
+                      resizeMode="contain"
+                      paused={false}
+                      onError={(error) => {
+                        console.error('[TaskDetail] Closing video playback error:', error, 'URL:', fullTask.closingImageUri);
+                      }}
+                      onLoad={() => {
+                        console.log('[TaskDetail] Closing video loaded successfully:', fullTask.closingImageUri);
+                      }}
+                    />
+                  )
+                ) : (
+                  <Image
+                    source={{ uri: fullTask.closingImageUri }}
+                    style={styles.taskDetailImage}
+                    resizeMode="contain"
+                    onLoad={() => {
+                      console.log('[TaskDetail] Closing image loaded successfully:', fullTask.closingImageUri);
+                    }}
+                    onError={(error) => {
+                      console.error('[TaskDetail] Closing image error:', error, 'URL:', fullTask.closingImageUri);
+                    }}
+                  />
+                )}
+              </View>
+            </View>
+          )}
+
+          {fullTask.status === 'סגור' && (
+            <View style={styles.taskClosedIndicator}>
+              <Text style={styles.taskClosedIndicatorText}>✓ משימה סגורה</Text>
             </View>
           )}
           
@@ -8989,14 +10050,14 @@ function MaintenanceTaskDetailScreen({
           <View style={styles.taskDetailSection}>
             <Pressable 
               onPress={() => {
-                setEditMediaUri(task.imageUri || undefined);
+                setEditMediaUri(fullTask.imageUri || undefined);
                 setHasNewMedia(false); // Reset flag when opening modal
                 setShowEditMediaModal(true);
               }}
               style={styles.addMediaButton}
             >
               <Text style={styles.addMediaButtonText}>
-                {task.imageUri ? 'ערוך/החלף תמונה/וידאו' : '+ הוסף תמונה/וידאו'}
+                {fullTask.imageUri ? 'ערוך/החלף תמונה/וידאו' : '+ הוסף תמונה/וידאו'}
               </Text>
             </Pressable>
           </View>
@@ -9009,7 +10070,7 @@ function MaintenanceTaskDetailScreen({
             </View>
           )}
 
-          {task.status === 'סגור' && !task.imageUri && (
+          {fullTask.status === 'סגור' && !fullTask.imageUri && (
             <View style={styles.taskActions}>
               <View style={styles.taskClosedButton}>
                 <Text style={styles.taskClosedButtonText}>✓ משימה סגורה</Text>
@@ -9268,6 +10329,7 @@ function NewMaintenanceTaskScreen({
   const [description, setDescription] = useState('');
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [showAssigneeModal, setShowAssigneeModal] = useState(false);
+  const [room, setRoom] = useState('');
   const [media, setMedia] = useState<SelectedMedia | null>(null);
   const [mediaUri, setMediaUri] = useState<string | undefined>(undefined);
   const [isSaving, setIsSaving] = useState(false);
@@ -9453,6 +10515,7 @@ function NewMaintenanceTaskScreen({
       status: 'פתוח',
       createdDate: new Date().toISOString().split('T')[0],
       assignedTo,
+      room: room || undefined,
       media: mediaUri ? { uri: mediaUri, type: media?.type || 'image/jpeg', name: media?.name } : null,
     };
 
@@ -9520,6 +10583,17 @@ function NewMaintenanceTaskScreen({
               </Text>
               <Text style={styles.selectCaret}>▾</Text>
             </Pressable>
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.label}>חדר</Text>
+            <TextInput
+              style={styles.input}
+              value={room}
+              onChangeText={setRoom}
+              placeholder="הזינו מספר חדר (אופציונלי)"
+              textAlign="right"
+            />
           </View>
 
           <View style={styles.field}>
@@ -11068,6 +12142,20 @@ const styles = StyleSheet.create({
   welcomeAvatarIcon: {
     fontSize: 40,
   },
+  welcomeChatButton: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderWidth: 3,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  welcomeChatIcon: {
+    fontSize: 40,
+  },
   welcomeContent: {
     flex: 1,
     gap: 6,
@@ -11086,6 +12174,42 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.9)',
     textAlign: 'right',
     fontWeight: '500',
+  },
+  tasksSectionHeader: {
+    marginTop: 24,
+    marginBottom: 12,
+    paddingHorizontal: 18,
+  },
+  tasksSectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1e293b',
+    textAlign: 'right',
+  },
+  maintenanceTasksFilter: {
+    flexDirection: 'row-reverse',
+    gap: 8,
+    alignItems: 'center',
+  },
+  maintenanceTasksFilterButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#ffffff',
+  },
+  maintenanceTasksFilterButtonActive: {
+    backgroundColor: '#3b82f6',
+    borderColor: '#3b82f6',
+  },
+  maintenanceTasksFilterButtonText: {
+    color: '#64748b',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  maintenanceTasksFilterButtonTextActive: {
+    color: '#ffffff',
   },
   sectionTitle: {
     fontSize: 18,
@@ -11254,6 +12378,31 @@ const styles = StyleSheet.create({
     fontSize: 28,
     marginBottom: 6,
     textAlign: 'center',
+  },
+  maintenanceBadge: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    backgroundColor: '#ef4444',
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    zIndex: 10,
+    shadowColor: '#ef4444',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  maintenanceBadgeText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   quickActionText: {
     color: '#fff',
@@ -11752,6 +12901,159 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 12,
   },
+  orderCardHeaderRight: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+  },
+  orderStatusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    fontSize: 13,
+    fontWeight: '700',
+    borderWidth: 2,
+  },
+  orderStatusOpen: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#f59e0b',
+    color: '#92400e',
+  },
+  orderStatusClosed: {
+    backgroundColor: '#d1fae5',
+    borderColor: '#10b981',
+    color: '#065f46',
+  },
+  orderCloseButton: {
+    backgroundColor: '#fee2e2',
+    borderWidth: 2,
+    borderColor: '#ef4444',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  orderCloseButtonText: {
+    color: '#991b1b',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  orderClosedMethod: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  orderCloseModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  orderCloseModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    maxWidth: 400,
+    width: '100%',
+    maxHeight: '80%',
+  },
+  orderCloseModalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0f172a',
+    textAlign: 'right',
+    marginBottom: 8,
+  },
+  orderCloseModalSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'right',
+    marginBottom: 20,
+  },
+  orderCloseModalOptions: {
+    gap: 12,
+  },
+  orderCloseOptionButton: {
+    backgroundColor: '#f1f5f9',
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    padding: 14,
+  },
+  orderCloseOptionButtonText: {
+    color: '#475569',
+    fontWeight: '700',
+    fontSize: 15,
+    textAlign: 'right',
+  },
+  orderCloseModalOther: {
+    gap: 16,
+  },
+  orderCloseModalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#475569',
+    textAlign: 'right',
+    marginBottom: 8,
+  },
+  orderClosePaymentSelect: {
+    maxHeight: 200,
+  },
+  orderClosePaymentOption: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+  },
+  orderClosePaymentOptionSelected: {
+    backgroundColor: '#dbeafe',
+    borderColor: '#3b82f6',
+  },
+  orderClosePaymentOptionText: {
+    color: '#475569',
+    fontWeight: '600',
+    fontSize: 14,
+    textAlign: 'right',
+  },
+  orderClosePaymentOptionTextSelected: {
+    color: '#1e40af',
+  },
+  orderCloseModalButtons: {
+    flexDirection: 'row-reverse',
+    gap: 12,
+    marginTop: 8,
+  },
+  orderCloseConfirmButton: {
+    flex: 1,
+    backgroundColor: '#3b82f6',
+    borderRadius: 10,
+    padding: 12,
+    alignItems: 'center',
+  },
+  orderCloseConfirmButtonDisabled: {
+    opacity: 0.5,
+  },
+  orderCloseConfirmButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  orderCloseCancelButton: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    padding: 12,
+    alignItems: 'center',
+  },
+  orderCloseCancelButtonText: {
+    color: '#475569',
+    fontWeight: '700',
+    fontSize: 15,
+  },
   unitIconContainer: {
     width: 50,
     height: 50,
@@ -11777,7 +13079,7 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     marginBottom: 4,
   },
-  orderCardId: {
+  orderCardUser: {
     fontSize: 13,
     textAlign: 'right',
     color: '#64748b',
@@ -11820,6 +13122,10 @@ const styles = StyleSheet.create({
   },
   orderInfoContent: {
     flex: 1,
+  },
+  orderInfoStacked: {
+    flex: 1,
+    gap: 12,
   },
   orderInfoLabel: {
     fontSize: 12,
@@ -12672,6 +13978,31 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
   },
+  maintenanceUnitOpenTaskButton: {
+    backgroundColor: '#3b82f6',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginLeft: 12,
+  },
+  maintenanceUnitOpenTaskButtonText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  maintenanceUnitsSection: {
+    marginBottom: 32,
+  },
+  maintenanceUnitsSectionTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0f172a',
+    textAlign: 'right',
+    marginBottom: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 2,
+    borderBottomColor: '#e2e8f0',
+  },
   unitCardHeader: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
@@ -12778,6 +14109,19 @@ const styles = StyleSheet.create({
   taskStatusText: {
     fontSize: 12,
     fontWeight: '700',
+  },
+  taskRoomBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+  },
+  taskRoomText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
   },
   taskPriorityBadge: {
     paddingHorizontal: 12,
@@ -13109,6 +14453,19 @@ const styles = StyleSheet.create({
   addPaymentText: {
     color: '#fff',
     fontWeight: '800',
+  },
+  backButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  backButtonText: {
+    color: '#475569',
+    fontWeight: '700',
+    fontSize: 14,
   },
   modalOverlay: {
     flex: 1,
@@ -14671,6 +16028,150 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     minHeight: 40,
   },
+  productCategoriesContainer: {
+    marginBottom: 24,
+  },
+  productCategory: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  productCategoryHeader: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#f8fafc',
+  },
+  productCategoryName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  productCategoryToggle: {
+    fontSize: 14,
+    color: '#64748b',
+  },
+  productOptionsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    padding: 16,
+    gap: 12,
+  },
+  productOption: {
+    width: '48%',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#fff',
+    gap: 8,
+  },
+  productOptionSelected: {
+    borderColor: '#3b82f6',
+    backgroundColor: '#eff6ff',
+  },
+  productOptionName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#0f172a',
+    textAlign: 'right',
+  },
+  productOptionQuantity: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  quantityBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quantityBtnText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  quantityInputSmall: {
+    width: 60,
+    padding: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    fontSize: 14,
+    textAlign: 'center',
+    backgroundColor: '#fff',
+    color: '#0f172a',
+  },
+  selectedProductsSummary: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 24,
+  },
+  selectedProductsTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'right',
+    marginBottom: 16,
+  },
+  selectedProductsList: {
+    gap: 12,
+  },
+  selectedProductItem: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  selectedProductName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#0f172a',
+    flex: 1,
+    textAlign: 'right',
+  },
+  selectedProductControls: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+  },
+  selectedProductQuantity: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+    minWidth: 30,
+    textAlign: 'center',
+  },
+  removeSelectedBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: '#ef4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  removeSelectedBtnText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#fff',
+  },
   addProductButton: {
     backgroundColor: '#3b82f6',
     paddingVertical: 12,
@@ -14828,6 +16329,97 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     paddingBottom: 32,
+  },
+  approvalsSection: {
+    backgroundColor: '#fff7ed',
+    borderWidth: 2,
+    borderColor: '#fb923c',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 24,
+  },
+  approvalsTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#9a3412',
+    marginBottom: 16,
+    textAlign: 'right',
+  },
+  approvalCard: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  approvalHeader: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  approvalAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
+  approvalAvatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  approvalAvatarPlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#f1f5f9',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  approvalAvatarIcon: {
+    fontSize: 24,
+  },
+  approvalInfo: {
+    flex: 1,
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  approvalName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  approvalRole: {
+    fontSize: 14,
+    color: '#64748b',
+  },
+  approvalDate: {
+    fontSize: 12,
+    color: '#94a3b8',
+  },
+  approvalActions: {
+    flexDirection: 'row-reverse',
+    gap: 8,
+  },
+  approvalApprove: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#22c55e',
+  },
+  approvalReject: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#ef4444',
+  },
+  approvalButtonText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 14,
   },
   employeeGrid: {
     flexDirection: 'row',
