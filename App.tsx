@@ -134,7 +134,7 @@ try {
 
 import { API_BASE_URL } from './src/apiConfig';
 
-type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'exitInspections' | 'cleaningInspections' | 'monthlyInspections' | 'warehouse' | 'warehouseMenu' | 'warehouseOrders' | 'warehouseInventory' | 'warehouseInventoryDetail' | 'newWarehouse' | 'newWarehouseItem' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask' | 'reports' | 'chat' | 'attendance' | 'invoices' | 'cleaningSchedule' | 'employeeManagement';
+type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'paymentConfirmation' | 'exitInspections' | 'cleaningInspections' | 'monthlyInspections' | 'warehouse' | 'warehouseMenu' | 'warehouseOrders' | 'warehouseInventory' | 'warehouseInventoryDetail' | 'newWarehouse' | 'newWarehouseItem' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask' | 'reports' | 'chat' | 'attendance' | 'invoices' | 'cleaningSchedule' | 'employeeManagement';
 type OrderStatus = 'חדש' | 'באישור' | 'שולם חלקית' | 'שולם' | 'בוטל';
 type InspectionStatus =
   | 'זמן הביקורות טרם הגיע'
@@ -467,6 +467,7 @@ function AppContent() {
   const [orders, setOrders] = useState<Order[]>(initialOrders);
   const [screen, setScreen] = useState<Screen>('home');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('');
   const [inspectionMissions, setInspectionMissions] = useState<InspectionMission[]>([]);
   const [cleaningInspectionMissions, setCleaningInspectionMissions] = useState<InspectionMission[]>([]);
   const [monthlyInspectionMissions, setMonthlyInspectionMissions] = useState<InspectionMission[]>([]);
@@ -836,9 +837,8 @@ function AppContent() {
       unitMap.set(unitName, unit);
     });
     
-    // Convert to array and filter out units with no orders
+    // Convert to array and show all units (not just ones with orders)
     return Array.from(unitMap.values())
-      .filter(unit => unit.orders.length > 0)
       .sort((a, b) => a.unitName.localeCompare(b.unitName));
   }, [orders]);
 
@@ -856,11 +856,6 @@ function AppContent() {
       loadSystemUsers(false);
     }
   }, [screen]);
-
-  const totals = useMemo(() => {
-    const totalPaid = orders.reduce((sum, o) => sum + o.paidAmount, 0);
-    return { count: orders.length, totalPaid };
-  }, [orders]);
 
   const defaultInspectionTasks: InspectionTask[] = useMemo(() => [
     // טיפול ברכיה
@@ -1877,11 +1872,30 @@ function AppContent() {
       }
       const statsData = (await res.json()) || [];
 
-      // Calculate total open tasks for the badge
-      const totalOpen = (statsData || []).reduce((sum: number, stat: any) => {
-        return sum + (stat.open || 0);
-      }, 0);
-      setOpenMaintenanceTasksCount(totalOpen);
+      // Calculate open tasks count the same way as MaintenanceScreen does
+      // MaintenanceScreen uses: unit.tasks.filter(t => t.status === 'פתוח').length
+      // So we do the same - count only tasks where status is exactly 'פתוח'
+      try {
+        const tasksRes = await fetch(`${API_BASE_URL}/api/maintenance/tasks`);
+        if (tasksRes.ok) {
+          const tasks = (await tasksRes.json()) || [];
+          // Count only tasks with status exactly 'פתוח' - same logic as MaintenanceScreen.getUnitStats()
+          const totalOpen = tasks.filter((t: any) => (t.status || '').toString().trim() === 'פתוח').length;
+          setOpenMaintenanceTasksCount(totalOpen);
+        } else {
+          // Fallback to stats if tasks endpoint fails
+          const totalOpen = (statsData || []).reduce((sum: number, stat: any) => {
+            return sum + (stat.open || 0);
+          }, 0);
+          setOpenMaintenanceTasksCount(totalOpen);
+        }
+      } catch (err) {
+        // Fallback to stats if tasks endpoint fails
+        const totalOpen = (statsData || []).reduce((sum: number, stat: any) => {
+          return sum + (stat.open || 0);
+        }, 0);
+        setOpenMaintenanceTasksCount(totalOpen);
+      }
 
       // Keep the 10 units always visible, and attach stats by unit_id
       const baseUnits: MaintenanceUnit[] = UNIT_NAMES.map(name => ({
@@ -2670,7 +2684,8 @@ function AppContent() {
     const canSeeEverything = isManager(userRole);
     
     const totalRevenue = orders.reduce((sum, o) => sum + o.totalAmount, 0);
-    const pendingAmount = totalRevenue - totals.totalPaid;
+    const totalPaid = orders.reduce((sum, o) => sum + o.paidAmount, 0);
+    const pendingAmount = totalRevenue - totalPaid;
     const activeOrders = orders.filter(o => o.status !== 'בוטל' && o.status !== 'שולם').length;
     const completedOrders = orders.filter(o => o.status === 'שולם').length;
     
@@ -3280,7 +3295,7 @@ function AppContent() {
           setSelectedMaintenanceUnitId(unitId);
           setScreen('maintenanceTasks');
         }}
-        onBack={() => setScreen('maintenance')}
+        onBack={() => setScreen('hub')}
         safeAreaInsets={safeAreaInsets}
         statusBar={statusBar}
       />
@@ -3322,6 +3337,27 @@ function AppContent() {
         userName={userName || ''}
         onSendMessage={sendChatMessage}
         onBack={() => setScreen('hub')}
+        safeAreaInsets={safeAreaInsets}
+        statusBar={statusBar}
+      />
+    );
+  }
+
+  if (screen === 'paymentConfirmation') {
+    const order = orders.find(o => o.id === selectedOrderId);
+    if (!order) {
+      setScreen('orders');
+      return null;
+    }
+    return (
+      <PaymentConfirmationScreen
+        order={order}
+        paymentMethod={selectedPaymentMethod || 'אשראי'}
+        onSuccess={() => {
+          loadOrders();
+          setScreen('orders');
+        }}
+        onBack={() => setScreen('orders')}
         safeAreaInsets={safeAreaInsets}
         statusBar={statusBar}
       />
@@ -3548,7 +3584,7 @@ function AppContent() {
             if (setIsSaving) setIsSaving(false);
           }
         }}
-        onCancel={() => setScreen('maintenanceTasks')}
+        onCancel={() => setScreen('maintenance')}
         safeAreaInsets={safeAreaInsets}
         statusBar={statusBar}
         userName={userName || ''}
@@ -3578,11 +3614,11 @@ function AppContent() {
 
   const getUnitStats = (unitOrders: Order[]) => {
     const total = unitOrders.length;
-    const paid = unitOrders.filter(o => 
-      o.status === 'שולם' || (o.totalAmount > 0 && o.paidAmount >= o.totalAmount)
+    // Count orders that aren't closed (not "שולם" and not "בוטל")
+    const open = unitOrders.filter(o => 
+      o.status !== 'שולם' && o.status !== 'בוטל'
     ).length;
-    const unpaid = total - paid;
-    return { total, paid, unpaid };
+    return { total, open };
   };
 
   return (
@@ -3610,34 +3646,6 @@ function AppContent() {
           <Text style={styles.ordersPageSubtitle}>
             שלום {userName}, ניהול הזמנות, תשלומים וסטטוסים
           </Text>
-          <Pressable
-            onPress={createOrder}
-            style={[styles.addOrderButton, { marginTop: 16, alignSelf: 'flex-start' }]}
-          >
-            <Text style={styles.addOrderButtonText}>+ יצירת הזמנה חדשה</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.summaryCardEnhanced}>
-          <View style={styles.summaryCardHeader}>
-            <Text style={styles.summaryTitleEnhanced}>סיכום מהיר</Text>
-          </View>
-          <View style={styles.summaryStatsRow}>
-            <View style={styles.summaryStatItem}>
-              <Text style={styles.summaryStatValue}>{totals.count}</Text>
-              <Text style={styles.summaryStatLabel}>הזמנות</Text>
-            </View>
-            <View style={styles.summaryStatDivider} />
-            <View style={styles.summaryStatItem}>
-              <Text style={styles.summaryStatValue}>₪{totals.totalPaid.toLocaleString('he-IL')}</Text>
-              <Text style={styles.summaryStatLabel}>שולם עד כה</Text>
-            </View>
-          </View>
-          <View style={styles.summaryNoteContainer}>
-            <Text style={styles.summaryNoteEnhanced}>
-              יצוא לאקסל ודו״ח הוצאות יתווספו בהמשך
-            </Text>
-          </View>
         </View>
 
         {orders.length === 0 ? (
@@ -3661,14 +3669,25 @@ function AppContent() {
                       setSelectedOrderId(id);
                       setScreen('orderEdit');
                     }}
-                    onClose={handleCloseOrder}
+                    onClose={(id, method) => {
+                      setSelectedOrderId(id);
+                      setSelectedPaymentMethod(method);
+                      setScreen('paymentConfirmation');
+                    }}
                   />
                 ))}
             </View>
           </View>
         ) : (
-          <View style={styles.ordersUnitsGrid}>
-            {ordersByUnit.map(unit => {
+          <View>
+            <Pressable
+              onPress={createOrder}
+              style={[styles.addOrderButton, { marginBottom: 16, alignSelf: 'flex-start' }]}
+            >
+              <Text style={styles.addOrderButtonText}>+ יצירת הזמנה חדשה</Text>
+            </Pressable>
+            <View style={styles.ordersUnitsGrid}>
+              {ordersByUnit.map(unit => {
               const stats = getUnitStats(unit.orders);
               return (
                 <Pressable
@@ -3687,25 +3706,16 @@ function AppContent() {
                   </View>
                   <View style={styles.ordersUnitStats}>
                     <View style={styles.ordersUnitStatItem}>
-                      <Text style={styles.ordersUnitStatValue}>{stats.total}</Text>
-                      <Text style={styles.ordersUnitStatLabel}>סה״כ הזמנות</Text>
-                    </View>
-                    <View style={styles.ordersUnitStatItem}>
                       <Text style={[styles.ordersUnitStatValue, { color: '#22c55e' }]}>
-                        {stats.paid}
+                        {stats.open}
                       </Text>
-                      <Text style={styles.ordersUnitStatLabel}>שולם</Text>
-                    </View>
-                    <View style={styles.ordersUnitStatItem}>
-                      <Text style={[styles.ordersUnitStatValue, { color: '#f59e0b' }]}>
-                        {stats.unpaid}
-                      </Text>
-                      <Text style={styles.ordersUnitStatLabel}>לא שולם</Text>
+                      <Text style={styles.ordersUnitStatLabel}>הזמנות פתוחות</Text>
                     </View>
                   </View>
                 </Pressable>
               );
             })}
+            </View>
           </View>
         )}
       </ScrollView>
@@ -3750,7 +3760,12 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
   };
   
   const handleCloseWithCreditCard = () => {
-    handleCloseOrder('אשראי');
+    // Navigate to payment confirmation screen (for now, skip payment page)
+    if (onClose) {
+      onClose(order.id, 'אשראי');
+    }
+    setShowCloseModal(false);
+    setShowOtherPayment(false);
   };
   
   const handleCloseWithOther = () => {
@@ -4238,42 +4253,6 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
                 textAlign="right"
               />
             </View>
-            <View style={[styles.field, styles.fieldHalf]}>
-              <Text style={styles.label}>סטטוס הזמנה</Text>
-              <Pressable
-                onPress={() => setStatusOpen(o => !o)}
-                style={styles.select}
-              >
-                <Text style={styles.selectValue}>{status}</Text>
-                <Text style={styles.selectCaret}>▾</Text>
-              </Pressable>
-              {statusOpen ? (
-                <View style={styles.selectList}>
-                  {statusOptions.map(option => (
-                    <Pressable
-                      key={option}
-                      style={[
-                        styles.selectItem,
-                        option === status && styles.selectItemActive,
-                      ]}
-                      onPress={() => {
-                        setStatus(option);
-                        setStatusOpen(false);
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.selectItemText,
-                          option === status && styles.selectItemTextActive,
-                        ]}
-                      >
-                        {option}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              ) : null}
-            </View>
           </View>
 
           {/* For new orders: only show total amount */}
@@ -4289,42 +4268,6 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
                   placeholder="0"
                   textAlign="right"
                 />
-              </View>
-              <View style={[styles.field, styles.fieldHalf]}>
-                <Text style={styles.label}>אופן תשלום</Text>
-                <Pressable
-                  onPress={() => setMethodOpen(o => !o)}
-                  style={styles.select}
-                >
-                  <Text style={styles.selectValue}>{method || 'בחרו אופן תשלום'}</Text>
-                  <Text style={styles.selectCaret}>▾</Text>
-                </Pressable>
-                {methodOpen ? (
-                  <View style={styles.selectList}>
-                    {paymentOptions.map(option => (
-                      <Pressable
-                        key={option}
-                        style={[
-                          styles.selectItem,
-                          option === method && styles.selectItemActive,
-                        ]}
-                        onPress={() => {
-                          setMethod(option);
-                          setMethodOpen(false);
-                        }}
-                      >
-                        <Text
-                          style={[
-                            styles.selectItemText,
-                            option === method && styles.selectItemTextActive,
-                          ]}
-                        >
-                          {option}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                ) : null}
               </View>
             </View>
           ) : (
@@ -4352,45 +4295,6 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
                     placeholder="0"
                     textAlign="right"
                   />
-                </View>
-              </View>
-
-              <View style={styles.fieldRow}>
-                <View style={[styles.field, styles.fieldHalf]}>
-                  <Text style={styles.label}>אופן תשלום</Text>
-                  <Pressable
-                    onPress={() => setMethodOpen(o => !o)}
-                    style={styles.select}
-                  >
-                    <Text style={styles.selectValue}>{method || 'בחרו אופן תשלום'}</Text>
-                    <Text style={styles.selectCaret}>▾</Text>
-                  </Pressable>
-                  {methodOpen ? (
-                    <View style={styles.selectList}>
-                      {paymentOptions.map(option => (
-                        <Pressable
-                          key={option}
-                          style={[
-                            styles.selectItem,
-                            option === method && styles.selectItemActive,
-                          ]}
-                          onPress={() => {
-                            setMethod(option);
-                            setMethodOpen(false);
-                          }}
-                        >
-                          <Text
-                            style={[
-                              styles.selectItemText,
-                              option === method && styles.selectItemTextActive,
-                            ]}
-                          >
-                            {option}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                  ) : null}
                 </View>
               </View>
 
@@ -8338,6 +8242,9 @@ function EmployeeManagementScreen({
   const [wageInput, setWageInput] = useState<string>('');
   const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const [editingLogId, setEditingLogId] = useState<string | null>(null);
+  const [editClockIn, setEditClockIn] = useState<string>('');
+  const [editClockOut, setEditClockOut] = useState<string>('');
   
   useEffect(() => {
     if (isAdmin) {
@@ -8469,6 +8376,78 @@ function EmployeeManagementScreen({
       }),
     };
   }, [selectedEmployee, employees, attendanceLogs]);
+
+  const updateAttendanceLog = async (logId: string, clockIn: string, clockOut: string | null) => {
+    try {
+      // Find the log to get the original date
+      const log = attendanceLogs.find((l: any) => l.id === logId);
+      if (!log) {
+        Alert.alert('שגיאה', 'לא נמצא רשומת נוכחות');
+        return;
+      }
+
+      // Parse the original clock_in to get the date
+      const originalClockIn = new Date(log.clock_in);
+      const [inHours, inMinutes] = clockIn.split(':').map(Number);
+      const clockInDate = new Date(originalClockIn);
+      clockInDate.setHours(inHours, inMinutes, 0, 0);
+
+      let clockOutDate: Date | null = null;
+      if (clockOut && clockOut !== 'פתוח' && clockOut.trim() !== '') {
+        const [outHours, outMinutes] = clockOut.split(':').map(Number);
+        clockOutDate = new Date(originalClockIn);
+        clockOutDate.setHours(outHours, outMinutes, 0, 0);
+        // If clock out is before clock in, assume it's the next day
+        if (clockOutDate < clockInDate) {
+          clockOutDate.setDate(clockOutDate.getDate() + 1);
+        }
+      }
+
+      const payload: any = {
+        clock_in: clockInDate.toISOString(),
+      };
+      if (clockOutDate) {
+        payload.clock_out = clockOutDate.toISOString();
+      } else if (clockOut === null || clockOut === '' || clockOut === 'פתוח') {
+        payload.clock_out = null;
+      }
+
+      const res = await fetch(`${API_BASE_URL}/api/attendance/logs/${encodeURIComponent(logId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        throw new Error(errorText || 'לא ניתן לעדכן את רשומת הנוכחות');
+      }
+
+      // Reload data
+      onRefresh();
+      setEditingLogId(null);
+      Alert.alert('הצלחה', 'רשומת הנוכחות עודכנה בהצלחה');
+    } catch (err: any) {
+      console.error('Error updating attendance log:', err);
+      Alert.alert('שגיאה', err.message || 'לא ניתן לעדכן את רשומת הנוכחות');
+    }
+  };
+
+  const startEditLog = (session: any) => {
+    setEditingLogId(session.id);
+    setEditClockIn(session.timeIn);
+    setEditClockOut(session.isOpen ? '' : session.timeOut);
+  };
+
+  const cancelEditLog = () => {
+    setEditingLogId(null);
+    setEditClockIn('');
+    setEditClockOut('');
+  };
+
+  const saveEditLog = async (logId: string) => {
+    await updateAttendanceLog(logId, editClockIn, editClockOut || null);
+  };
 
   const updateWage = async (employeeId: string, wage: number) => {
     try {
@@ -8710,16 +8689,61 @@ function EmployeeManagementScreen({
                               )}
                             </View>
                           </View>
-                          <View style={styles.sessionTimes}>
-                            <View style={styles.sessionTimeItem}>
-                              <Text style={styles.sessionTimeLabel}>כניסה:</Text>
-                              <Text style={styles.sessionTimeValue}>{session.timeIn}</Text>
+                          {editingLogId === session.id ? (
+                            <View style={styles.sessionEdit}>
+                              <View style={styles.sessionEditRow}>
+                                <Text style={styles.sessionEditLabel}>כניסה:</Text>
+                                <TextInput
+                                  style={styles.sessionEditInput}
+                                  value={editClockIn}
+                                  onChangeText={setEditClockIn}
+                                  placeholder="HH:MM"
+                                />
+                              </View>
+                              <View style={styles.sessionEditRow}>
+                                <Text style={styles.sessionEditLabel}>יציאה:</Text>
+                                <TextInput
+                                  style={styles.sessionEditInput}
+                                  value={editClockOut}
+                                  onChangeText={setEditClockOut}
+                                  placeholder="פתוח"
+                                />
+                              </View>
+                              <View style={styles.sessionEditActions}>
+                                <Pressable
+                                  style={styles.sessionEditSaveButton}
+                                  onPress={() => saveEditLog(session.id)}
+                                >
+                                  <Text style={styles.sessionEditButtonText}>שמור</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={styles.sessionEditCancelButton}
+                                  onPress={cancelEditLog}
+                                >
+                                  <Text style={styles.sessionEditButtonText}>ביטול</Text>
+                                </Pressable>
+                              </View>
                             </View>
-                            <View style={styles.sessionTimeItem}>
-                              <Text style={styles.sessionTimeLabel}>יציאה:</Text>
-                              <Text style={styles.sessionTimeValue}>{session.timeOut}</Text>
-                            </View>
-                          </View>
+                          ) : (
+                            <>
+                              <View style={styles.sessionTimes}>
+                                <View style={styles.sessionTimeItem}>
+                                  <Text style={styles.sessionTimeLabel}>כניסה:</Text>
+                                  <Text style={styles.sessionTimeValue}>{session.timeIn}</Text>
+                                </View>
+                                <View style={styles.sessionTimeItem}>
+                                  <Text style={styles.sessionTimeLabel}>יציאה:</Text>
+                                  <Text style={styles.sessionTimeValue}>{session.timeOut}</Text>
+                                </View>
+                              </View>
+                              <Pressable
+                                style={styles.sessionEditButton}
+                                onPress={() => startEditLog(session)}
+                              >
+                                <Text style={styles.sessionEditButtonText}>ערוך</Text>
+                              </Pressable>
+                            </>
+                          )}
                         </View>
                       ))}
                     </View>
@@ -9040,29 +9064,25 @@ function MaintenanceScreen({
           ) : (
             <>
               <View style={styles.unitStatItem}>
-                <Text style={styles.unitStatValue}>{stats.total}</Text>
-                <Text style={styles.unitStatLabel}>סה״כ קריאות</Text>
-              </View>
-              <View style={styles.unitStatItem}>
-                <Text style={[styles.unitStatValue, { color: '#f59e0b' }]}>
+                <Text style={[styles.unitStatValue, { color: '#ef4444' }]}>
                   {stats.open}
                 </Text>
                 <Text style={styles.unitStatLabel}>קריאות פתוחות</Text>
               </View>
               <View style={styles.unitStatItem}>
-                <Text style={[styles.unitStatValue, { color: '#22c55e' }]}>
+                <Text style={[styles.unitStatValue, { color: '#3b82f6' }]}>
                   {stats.closed}
                 </Text>
                 <Text style={styles.unitStatLabel}>קריאות סגורות</Text>
               </View>
               <View style={styles.unitStatItem}>
-                <Text style={[styles.unitStatValue, { color: '#3b82f6' }]}>
+                <Text style={[styles.unitStatValue, { color: '#ef4444' }]}>
                   {stats.openedToday || 0}
                 </Text>
                 <Text style={styles.unitStatLabel}>נפתח היום</Text>
               </View>
               <View style={styles.unitStatItem}>
-                <Text style={[styles.unitStatValue, { color: '#8b5cf6' }]}>
+                <Text style={[styles.unitStatValue, { color: '#3b82f6' }]}>
                   {stats.closedToday || 0}
                 </Text>
                 <Text style={styles.unitStatLabel}>נסגר היום</Text>
@@ -9112,7 +9132,7 @@ function MaintenanceTasksScreen({
   safeAreaInsets,
   statusBar,
 }: MaintenanceTasksScreenProps) {
-  const [filter, setFilter] = useState<'all' | 'open' | 'closed'>('all');
+  const [filter, setFilter] = useState<'open' | 'closed'>('open');
   const [loadedUnit, setLoadedUnit] = useState<MaintenanceUnit | null>(unit);
   const [isLoadingTasks, setIsLoadingTasks] = useState(false);
   
@@ -9135,18 +9155,27 @@ function MaintenanceTasksScreen({
             const tUnitId = normalizeMaintenanceUnitId(t.unit_id || t.unitId || t.unit);
             return tUnitId === unit.id;
           })
-          .map((t: any) => ({
-            id: (t.id || `task-${Date.now()}`).toString(),
-            unitId: unit.id,
-            title: (t.title || '').toString(),
-            description: (t.description || '').toString(),
-            status: (t.status || 'פתוח') as MaintenanceStatus,
-            createdDate: (t.created_date || t.createdDate || new Date().toISOString().split('T')[0]).toString(),
-            assignedTo: (t.assigned_to || t.assignedTo || undefined)?.toString(),
-            imageUri: (t.image_uri || t.imageUri || undefined)?.toString(),
-            room: (t.room || undefined)?.toString(),
-            media: null,
-          }));
+          .map((t: any) => {
+            // CRITICAL: Always use the database ID - never generate a client-side ID
+            // If the database doesn't have an ID, this task is invalid
+            if (!t.id) {
+              console.error('[MaintenanceTasksScreen] Task missing ID:', t);
+              return null;
+            }
+            return {
+              id: t.id.toString(), // Use the actual database UUID
+              unitId: unit.id,
+              title: (t.title || '').toString(),
+              description: (t.description || '').toString(),
+              status: (t.status || 'פתוח') as MaintenanceStatus,
+              createdDate: (t.created_date || t.createdDate || new Date().toISOString().split('T')[0]).toString(),
+              assignedTo: (t.assigned_to || t.assignedTo || undefined)?.toString(),
+              imageUri: (t.image_uri || t.imageUri || undefined)?.toString(),
+              room: (t.room || undefined)?.toString(),
+              media: null,
+            };
+          })
+          .filter((t): t is MaintenanceTask => t !== null);
         
         unitTasks.sort((a: MaintenanceTask, b: MaintenanceTask) => 
           (b.createdDate || '').localeCompare(a.createdDate || '')
@@ -9224,23 +9253,13 @@ function MaintenanceTasksScreen({
                 קריאות פתוחות
               </Text>
             </Pressable>
-            <Pressable
-              style={[styles.maintenanceTasksFilterButton, filter === 'all' && styles.maintenanceTasksFilterButtonActive]}
-              onPress={() => setFilter('all')}
-            >
-              <Text style={[styles.maintenanceTasksFilterButtonText, filter === 'all' && styles.maintenanceTasksFilterButtonTextActive]}>
-                סה״כ קריאות
-              </Text>
-            </Pressable>
           </View>
         </View>
 
         {(() => {
           const today = new Date().toISOString().split('T')[0];
           
-          const filteredTasks = filter === 'all' 
-            ? displayUnit.tasks 
-            : filter === 'open' 
+          const filteredTasks = filter === 'open' 
             ? displayUnit.tasks.filter(t => t.status === 'פתוח')
             : displayUnit.tasks.filter(t => t.status === 'סגור');
           
@@ -9401,6 +9420,8 @@ function MaintenanceTaskDetailScreen({
             console.log('[TaskDetail] ==========================================');
             const updatedTask: MaintenanceTask = {
               ...task,
+              // CRITICAL: Always use the database ID from the response, not the client-generated one
+              id: (fullTaskData.id || task.id).toString(),
               // Always use the fetched image_uri (could be image or video) - don't fallback to task.imageUri if it's empty
               imageUri: imageUri || undefined,
               closingImageUri: closingImageUri || undefined,
@@ -9801,7 +9822,7 @@ function MaintenanceTaskDetailScreen({
           )}
 
 
-          {/* Display image/video if exists (for both open and closed tasks) */}
+          {/* Opening Media (imageUri) - ALWAYS show if exists, even for closed tasks */}
           {!isLoadingFullTask && fullTask.imageUri ? (
             <View style={styles.taskDetailSection}>
               {(() => {
@@ -10325,7 +10346,6 @@ function NewMaintenanceTaskScreen({
   statusBar,
   userName,
 }: NewMaintenanceTaskScreenProps) {
-  const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [showAssigneeModal, setShowAssigneeModal] = useState(false);
@@ -10498,7 +10518,7 @@ function NewMaintenanceTaskScreen({
   };
 
   const handleSave = async () => {
-    if (!title || !description) {
+    if (!description) {
       Alert.alert('שגיאה', 'אנא מלאו את כל השדות הנדרשים');
       return;
     }
@@ -10510,7 +10530,7 @@ function NewMaintenanceTaskScreen({
     const newTask: MaintenanceTask = {
       id: `task-${Date.now()}`,
       unitId: unit.id,
-      title,
+      title: description.substring(0, 100), // Use description as title since title field is removed
       description,
       status: 'פתוח',
       createdDate: new Date().toISOString().split('T')[0],
@@ -10535,7 +10555,7 @@ function NewMaintenanceTaskScreen({
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.warehouseHeader}>
           <View>
-            <Text style={styles.title}>משימה חדשה</Text>
+            <Text style={styles.title}>קריאה חדשה {unit.name}</Text>
             <Text style={styles.subtitle}>
               הוספת משימת תחזוקה ל{unit.name}
             </Text>
@@ -10544,18 +10564,7 @@ function NewMaintenanceTaskScreen({
 
         <View style={styles.card}>
           <View style={styles.field}>
-            <Text style={styles.label}>כותרת המשימה *</Text>
-            <TextInput
-              style={styles.input}
-              value={title}
-              onChangeText={setTitle}
-              placeholder="הזינו כותרת"
-              textAlign="right"
-            />
-          </View>
-
-          <View style={styles.field}>
-            <Text style={styles.label}>תיאור *</Text>
+            <Text style={styles.label}>תיאור הקריאה *</Text>
             <TextInput
               style={[styles.input, styles.textArea]}
               value={description}
@@ -11749,6 +11758,113 @@ function OptionCard({
   );
 }
 
+type PaymentConfirmationScreenProps = {
+  order: Order;
+  paymentMethod: string;
+  onSuccess: () => void;
+  onBack: () => void;
+  safeAreaInsets: { top: number };
+  statusBar: React.ReactElement;
+};
+
+function PaymentConfirmationScreen({
+  order,
+  paymentMethod,
+  onSuccess,
+  onBack,
+  safeAreaInsets,
+  statusBar,
+}: PaymentConfirmationScreenProps) {
+  const [isProcessing, setIsProcessing] = useState(true);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const confirmPayment = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/orders/${order.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            status: 'שולם',
+            payment_method: paymentMethod,
+          }),
+        });
+
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({ detail: 'שגיאה לא ידועה' }));
+          throw new Error(errorData.detail || 'לא ניתן לעדכן את ההזמנה');
+        }
+
+        setIsSuccess(true);
+        setIsProcessing(false);
+        
+        // Call onSuccess after 2 seconds
+        setTimeout(() => {
+          onSuccess();
+        }, 2000);
+      } catch (err: any) {
+        console.error('Error confirming payment:', err);
+        setError(err.message || 'אירעה שגיאה באישור התשלום');
+        setIsProcessing(false);
+      }
+    };
+
+    confirmPayment();
+  }, [order.id, paymentMethod, onSuccess]);
+
+  return (
+    <SafeAreaView
+      style={[styles.container, { paddingTop: safeAreaInsets.top }]}
+    >
+      {statusBar}
+      <View style={styles.ordersHeader}>
+        <Pressable onPress={onBack} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← חזרה</Text>
+        </Pressable>
+      </View>
+      <ScrollView contentContainerStyle={[styles.scroll, { justifyContent: 'center', alignItems: 'center', minHeight: '100%' }]}>
+        <View style={{ backgroundColor: '#fff', borderRadius: 20, padding: 40, maxWidth: 500, width: '100%', alignItems: 'center' }}>
+          {isProcessing ? (
+            <>
+              <ActivityIndicator size="large" color="#3b82f6" style={{ marginBottom: 24 }} />
+              <Text style={[styles.title, { textAlign: 'center' }]}>מעבד תשלום...</Text>
+              <Text style={[styles.subtitle, { textAlign: 'center' }]}>אנא המתן</Text>
+            </>
+          ) : isSuccess ? (
+            <>
+              <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#10b981', justifyContent: 'center', alignItems: 'center', marginBottom: 24 }}>
+                <Text style={{ fontSize: 48, color: '#fff', fontWeight: 'bold' }}>✓</Text>
+              </View>
+              <Text style={[styles.title, { textAlign: 'center' }]}>תשלום אושר בהצלחה!</Text>
+              <Text style={[styles.subtitle, { textAlign: 'center' }]}>
+                ההזמנה נסגרה בהצלחה באמצעות {paymentMethod}
+              </Text>
+              <Text style={[styles.subtitle, { textAlign: 'center', color: '#94a3b8', marginTop: 16 }]}>
+                מועבר לדף ההזמנות...
+              </Text>
+            </>
+          ) : (
+            <>
+              <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#ef4444', justifyContent: 'center', alignItems: 'center', marginBottom: 24 }}>
+                <Text style={{ fontSize: 48, color: '#fff', fontWeight: 'bold' }}>✗</Text>
+              </View>
+              <Text style={[styles.title, { textAlign: 'center' }]}>שגיאה באישור התשלום</Text>
+              <Text style={[styles.subtitle, { textAlign: 'center' }]}>{error}</Text>
+              <Pressable
+                onPress={onBack}
+                style={{ marginTop: 24, backgroundColor: '#3b82f6', paddingHorizontal: 28, paddingVertical: 14, borderRadius: 12 }}
+              >
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>חזרה להזמנות</Text>
+              </Pressable>
+            </>
+          )}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -12876,15 +12992,19 @@ const styles = StyleSheet.create({
   orderCardEnhanced: {
     backgroundColor: '#ffffff',
     borderRadius: 20,
+    width: '48%',
     padding: 20,
-    marginTop: 16,
+    marginTop: 0,
+    marginRight: 0,
+    marginLeft: 0,
     borderWidth: 2,
     borderColor: '#e2e8f0',
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 },
-    marginBottom: 4,
+    marginBottom: 0,
+    flexShrink: 1,
   },
   orderCardHeaderEnhanced: {
     flexDirection: 'row-reverse',
@@ -13708,6 +13828,8 @@ const styles = StyleSheet.create({
   },
   ordersList: {
     gap: 12,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
   },
   ordersHeaderRow: {
     flexDirection: 'row-reverse',
@@ -14051,6 +14173,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
     marginTop: 4,
+    textAlign: 'center',
   },
   taskCard: {
     backgroundColor: '#fff',
@@ -16205,7 +16328,9 @@ const styles = StyleSheet.create({
   },
   ordersUnitsGrid: {
     marginTop: 16,
-    gap: 16,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
   },
   ordersUnitCard: {
     backgroundColor: '#fff',
@@ -16217,6 +16342,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
+    width: '48%',
+    marginBottom: 16,
   },
   ordersUnitCardHeader: {
     flexDirection: 'row-reverse',
@@ -16298,6 +16425,8 @@ const styles = StyleSheet.create({
   ordersList: {
     marginTop: 16,
     gap: 16,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
   },
   signOutButton: {
     flexDirection: 'row',
@@ -16692,6 +16821,69 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#0f172a',
+  },
+  sessionEditButton: {
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#3b82f6',
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  sessionEditButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  sessionEdit: {
+    marginTop: 12,
+    padding: 16,
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  sessionEditRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  sessionEditLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+    minWidth: 60,
+    textAlign: 'right',
+  },
+  sessionEditInput: {
+    flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    fontSize: 14,
+    backgroundColor: '#ffffff',
+    textAlign: 'right',
+  },
+  sessionEditActions: {
+    flexDirection: 'row-reverse',
+    gap: 8,
+    marginTop: 12,
+    justifyContent: 'flex-end',
+  },
+  sessionEditSaveButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#22c55e',
+    borderRadius: 8,
+  },
+  sessionEditCancelButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#ef4444',
+    borderRadius: 8,
   },
 });
 
