@@ -21,6 +21,7 @@ import {
   Platform,
   PermissionsAndroid,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import Video from 'react-native-video';
@@ -2401,13 +2402,27 @@ function AppContent() {
     );
   };
 
-  const handleCloseOrder = async (orderId: string, paymentMethod: string) => {
+  const handleCloseOrder = async (orderId: string, paymentMethod: string, paymentAmount?: number) => {
     try {
+      // Find the order to get current paid_amount
+      const currentOrder = orders.find(o => o.id === orderId);
+      const currentPaidAmount = currentOrder?.paidAmount || 0;
+      const totalAmount = currentOrder?.totalAmount || 0;
+      
+      // Calculate new paid amount (add payment amount to existing)
+      const newPaidAmount = paymentAmount 
+        ? currentPaidAmount + paymentAmount 
+        : totalAmount; // If no amount specified, pay full amount
+      
+      // Determine if order should be fully closed
+      const shouldCloseOrder = newPaidAmount >= totalAmount;
+      
       const res = await fetch(`${API_BASE_URL}/api/orders/${orderId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          status: 'שולם',
+          paid_amount: newPaidAmount,
+          status: shouldCloseOrder ? 'שולם' : (currentOrder?.status || 'חדש'),
           payment_method: paymentMethod,
         }),
       });
@@ -2420,7 +2435,8 @@ function AppContent() {
 
       // Update local state
       updateOrder(orderId, {
-        status: 'שולם',
+        paidAmount: newPaidAmount,
+        status: shouldCloseOrder ? 'שולם' : (currentOrder?.status || 'חדש'),
         paymentMethod: paymentMethod,
       });
     } catch (err: any) {
@@ -3353,8 +3369,10 @@ function AppContent() {
       <PaymentConfirmationScreen
         order={order}
         paymentMethod={selectedPaymentMethod || 'אשראי'}
-        onSuccess={() => {
-          loadOrders();
+        onSuccess={async () => {
+          // Wait a bit for webhook to process, then reload orders
+          await new Promise(resolve => setTimeout(resolve, 500));
+          await loadOrders();
           setScreen('orders');
         }}
         onBack={() => setScreen('orders')}
@@ -3669,10 +3687,10 @@ function AppContent() {
                       setSelectedOrderId(id);
                       setScreen('orderEdit');
                     }}
-                    onClose={(id, method) => {
-                      setSelectedOrderId(id);
-                      setSelectedPaymentMethod(method);
-                      setScreen('paymentConfirmation');
+                    onClose={async (id, method, amount) => {
+                      // For other payment methods, directly update with amount
+                      // Credit card payments are handled separately via handleCloseWithCreditCard
+                      await handleCloseOrder(id, method, amount);
                     }}
                   />
                 ))}
@@ -3730,13 +3748,14 @@ type OrderCardProps = {
     changes: Partial<Pick<Order, 'status' | 'paidAmount' | 'paymentMethod'>>,
   ) => void;
   onEdit: (id: string) => void;
-  onClose?: (id: string, paymentMethod: string) => void;
+  onClose?: (id: string, paymentMethod: string, amount?: number) => void;
 };
 
 function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
   const [showCloseModal, setShowCloseModal] = React.useState(false);
   const [showOtherPayment, setShowOtherPayment] = React.useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = React.useState('');
+  const [paymentAmount, setPaymentAmount] = React.useState(0);
 
   const paidPercent = Math.min(
     100,
@@ -3750,22 +3769,61 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
   // Check if order is open (not fully paid or cancelled)
   const isOpen = order.status !== 'שולם' && order.status !== 'בוטל';
   
-  const handleCloseOrder = (method: string) => {
+  // Initialize payment amount when modal opens
+  React.useEffect(() => {
+    if (showCloseModal && !showOtherPayment) {
+      setPaymentAmount(remainingAmount > 0 ? remainingAmount : order.totalAmount);
+    }
+  }, [showCloseModal, showOtherPayment, remainingAmount, order.totalAmount]);
+  
+  const handleCloseOrder = (method: string, amount?: number) => {
     if (onClose) {
-      onClose(order.id, method);
+      onClose(order.id, method, amount);
     }
     setShowCloseModal(false);
     setShowOtherPayment(false);
     setSelectedPaymentMethod('');
+    setPaymentAmount(0);
   };
   
-  const handleCloseWithCreditCard = () => {
-    // Navigate to payment confirmation screen (for now, skip payment page)
-    if (onClose) {
-      onClose(order.id, 'אשראי');
+  const handleCloseWithCreditCard = async () => {
+    // Use the selected payment amount (from slider) or remaining amount
+    const amountToPay = paymentAmount > 0 ? paymentAmount : (remainingAmount > 0 ? remainingAmount : order.totalAmount);
+    
+    // Check if unit is הודולה 1-5, use different payment URL
+    const isHodula = order.unitNumber && (
+      order.unitNumber === 'הודולה 1' ||
+      order.unitNumber === 'הודולה 2' ||
+      order.unitNumber === 'הודולה 3' ||
+      order.unitNumber === 'הודולה 4' ||
+      order.unitNumber === 'הודולה 5'
+    );
+    
+    const cardcomUrl = isHodula
+      ? 'https://secure.cardcom.solutions/EA/EA5/rEpuhCsHV0uqmqZNFTFFNw/PaymentSP'
+      : 'https://secure.cardcom.solutions/EA/EA5/PgwM0wy1uEC4Ade0BLZHlA/PaymentSP';
+    
+    const successUrl = encodeURIComponent(`https://vila-app-front-pwa.vercel.app/payment-confirmation?method=אשראי&amount=${amountToPay}&orderId=${order.id}`);
+    const failureUrl = encodeURIComponent(`https://vila-app-front-pwa.vercel.app/orders`);
+    
+    // Build Cardcom payment URL with parameters
+    const paymentUrl = `${cardcomUrl}?Sum=${amountToPay}&Coin=1&SuccessRedirectUrl=${successUrl}&ErrorRedirectUrl=${failureUrl}&OrderId=${order.id}&Description=${encodeURIComponent(`תשלום הזמנה ${order.unitNumber}`)}`;
+    
+    // Open Cardcom payment page in browser
+    try {
+      const canOpen = await Linking.canOpenURL(paymentUrl);
+      if (canOpen) {
+        await Linking.openURL(paymentUrl);
+      } else {
+        Alert.alert('שגיאה', 'לא ניתן לפתוח את דף התשלום');
+      }
+    } catch (error) {
+      Alert.alert('שגיאה', 'אירעה שגיאה בפתיחת דף התשלום');
     }
+    
     setShowCloseModal(false);
     setShowOtherPayment(false);
+    setPaymentAmount(0);
   };
   
   const handleCloseWithOther = () => {
@@ -3792,8 +3850,9 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
           </Text>
           {isOpen && (
             <Pressable
-              style={styles.orderCloseButton}
-              onPress={() => {
+              style={[styles.orderCloseButton, { marginRight: 12 }]}
+              onPress={(e) => {
+                e.stopPropagation();
                 setShowCloseModal(true);
               }}
             >
@@ -3801,7 +3860,7 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
             </Pressable>
           )}
           {!isOpen && order.paymentMethod && (
-            <Text style={styles.orderClosedMethod}>
+            <Text style={[styles.orderClosedMethod, { marginRight: 12 }]}>
               נסגר ב-{order.paymentMethod}
             </Text>
           )}
@@ -3931,6 +3990,7 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
             setShowCloseModal(false);
             setShowOtherPayment(false);
             setSelectedPaymentMethod('');
+            setPaymentAmount(0);
           }}
         >
           <Pressable
@@ -3939,6 +3999,7 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
               setShowCloseModal(false);
               setShowOtherPayment(false);
               setSelectedPaymentMethod('');
+              setPaymentAmount(0);
             }}
           >
             <Pressable
@@ -3950,6 +4011,50 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
               
               {!showOtherPayment ? (
                 <View style={styles.orderCloseModalOptions}>
+                  {/* Payment Amount Slider */}
+                  <View style={styles.orderPaymentAmountSection}>
+                    <Text style={styles.orderPaymentAmountLabel}>
+                      סכום לתשלום: ₪{paymentAmount > 0 ? paymentAmount.toLocaleString('he-IL') : remainingAmount.toLocaleString('he-IL')}
+                    </Text>
+                    <TextInput
+                      style={styles.orderPaymentAmountInput}
+                      value={paymentAmount > 0 ? paymentAmount.toString() : remainingAmount.toString()}
+                      onChangeText={(text) => {
+                        const num = Number(text.replace(/[^0-9]/g, ''));
+                        if (num >= 0 && num <= remainingAmount) {
+                          setPaymentAmount(num);
+                        } else if (num > remainingAmount) {
+                          setPaymentAmount(remainingAmount);
+                        }
+                      }}
+                      keyboardType="numeric"
+                      textAlign="center"
+                      placeholder={remainingAmount.toString()}
+                    />
+                    <View style={styles.orderPaymentAmountQuickButtons}>
+                      <Pressable
+                        style={styles.orderPaymentAmountQuickButton}
+                        onPress={() => setPaymentAmount(0)}
+                      >
+                        <Text style={styles.orderPaymentAmountQuickButtonText}>₪0</Text>
+                      </Pressable>
+                      <Pressable
+                        style={styles.orderPaymentAmountQuickButton}
+                        onPress={() => setPaymentAmount(Math.floor(remainingAmount / 2))}
+                      >
+                        <Text style={styles.orderPaymentAmountQuickButtonText}>חצי סכום</Text>
+                      </Pressable>
+                      <Pressable
+                        style={styles.orderPaymentAmountQuickButton}
+                        onPress={() => setPaymentAmount(remainingAmount)}
+                      >
+                        <Text style={styles.orderPaymentAmountQuickButtonText}>סכום מלא</Text>
+                      </Pressable>
+                    </View>
+                    <Text style={styles.orderPaymentAmountRange}>
+                      ₪0 - ₪{remainingAmount.toLocaleString('he-IL')}
+                    </Text>
+                  </View>
                   <Pressable
                     style={styles.orderCloseOptionButton}
                     onPress={handleCloseWithCreditCard}
@@ -3965,6 +4070,50 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
                 </View>
               ) : (
                 <View style={styles.orderCloseModalOther}>
+                  {/* Payment Amount Slider */}
+                  <View style={styles.orderPaymentAmountSection}>
+                    <Text style={styles.orderPaymentAmountLabel}>
+                      סכום לתשלום: ₪{paymentAmount > 0 ? paymentAmount.toLocaleString('he-IL') : remainingAmount.toLocaleString('he-IL')}
+                    </Text>
+                    <TextInput
+                      style={styles.orderPaymentAmountInput}
+                      value={paymentAmount > 0 ? paymentAmount.toString() : remainingAmount.toString()}
+                      onChangeText={(text) => {
+                        const num = Number(text.replace(/[^0-9]/g, ''));
+                        if (num >= 0 && num <= remainingAmount) {
+                          setPaymentAmount(num);
+                        } else if (num > remainingAmount) {
+                          setPaymentAmount(remainingAmount);
+                        }
+                      }}
+                      keyboardType="numeric"
+                      textAlign="center"
+                      placeholder={remainingAmount.toString()}
+                    />
+                    <View style={styles.orderPaymentAmountQuickButtons}>
+                      <Pressable
+                        style={styles.orderPaymentAmountQuickButton}
+                        onPress={() => setPaymentAmount(0)}
+                      >
+                        <Text style={styles.orderPaymentAmountQuickButtonText}>₪0</Text>
+                      </Pressable>
+                      <Pressable
+                        style={styles.orderPaymentAmountQuickButton}
+                        onPress={() => setPaymentAmount(Math.floor(remainingAmount / 2))}
+                      >
+                        <Text style={styles.orderPaymentAmountQuickButtonText}>חצי סכום</Text>
+                      </Pressable>
+                      <Pressable
+                        style={styles.orderPaymentAmountQuickButton}
+                        onPress={() => setPaymentAmount(remainingAmount)}
+                      >
+                        <Text style={styles.orderPaymentAmountQuickButtonText}>סכום מלא</Text>
+                      </Pressable>
+                    </View>
+                    <Text style={styles.orderPaymentAmountRange}>
+                      ₪0 - ₪{remainingAmount.toLocaleString('he-IL')}
+                    </Text>
+                  </View>
                   <Text style={styles.orderCloseModalLabel}>בחרו דרך תשלום:</Text>
                   <ScrollView style={styles.orderClosePaymentSelect}>
                     {paymentOptions.filter(method => method !== 'אשראי').map((method) => (
@@ -3998,6 +4147,7 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
                       onPress={() => {
                         setShowOtherPayment(false);
                         setSelectedPaymentMethod('');
+                        setPaymentAmount(0);
                       }}
                     >
                       <Text style={styles.orderCloseCancelButtonText}>ביטול</Text>
@@ -4185,7 +4335,7 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
             <Text style={styles.selectCaret}>▾</Text>
           </Pressable>
           {unitOpen ? (
-            <View style={styles.selectList}>
+            <ScrollView style={styles.selectList} nestedScrollEnabled={true}>
               {UNIT_CATEGORIES.map(category => (
                 <View key={category.name}>
                   <View style={styles.selectCategory}>
@@ -4215,7 +4365,7 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
                   ))}
                 </View>
               ))}
-            </View>
+            </ScrollView>
           ) : null}
 
           <View style={styles.fieldRow}>
@@ -12992,19 +13142,18 @@ const styles = StyleSheet.create({
   orderCardEnhanced: {
     backgroundColor: '#ffffff',
     borderRadius: 20,
-    width: '48%',
+    width: '100%',
     padding: 20,
     marginTop: 0,
     marginRight: 0,
     marginLeft: 0,
+    marginBottom: 0,
     borderWidth: 2,
     borderColor: '#e2e8f0',
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 },
-    marginBottom: 0,
-    flexShrink: 1,
   },
   orderCardHeaderEnhanced: {
     flexDirection: 'row-reverse',
@@ -13018,13 +13167,13 @@ const styles = StyleSheet.create({
   orderCardHeaderLeft: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    flex: 1,
-    gap: 12,
+    flexShrink: 0,
   },
   orderCardHeaderRight: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 12,
+    flex: 1,
+    marginRight: 12,
   },
   orderStatusBadge: {
     paddingHorizontal: 12,
@@ -13092,6 +13241,59 @@ const styles = StyleSheet.create({
   },
   orderCloseModalOptions: {
     gap: 12,
+  },
+  orderPaymentAmountSection: {
+    marginBottom: 16,
+    padding: 16,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  orderPaymentAmountLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'right',
+    marginBottom: 12,
+  },
+  orderPaymentAmountInput: {
+    width: '100%',
+    padding: 16,
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    fontSize: 24,
+    fontWeight: '700',
+    textAlign: 'center',
+    backgroundColor: '#fff',
+    marginBottom: 12,
+  },
+  orderPaymentAmountQuickButtons: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 8,
+  },
+  orderPaymentAmountQuickButton: {
+    flex: 1,
+    padding: 10,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  orderPaymentAmountQuickButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  orderPaymentAmountRange: {
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'center',
+    fontWeight: '500',
   },
   orderCloseOptionButton: {
     backgroundColor: '#f1f5f9',
@@ -13190,7 +13392,7 @@ const styles = StyleSheet.create({
     color: '#3b82f6',
   },
   orderCardTitleContainer: {
-    flex: 1,
+    flexShrink: 1,
   },
   orderCardUnitTitle: {
     fontSize: 22,
@@ -16424,9 +16626,8 @@ const styles = StyleSheet.create({
   },
   ordersList: {
     marginTop: 16,
+    flexDirection: 'column',
     gap: 16,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
   },
   signOutButton: {
     flexDirection: 'row',
