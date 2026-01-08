@@ -555,72 +555,55 @@ function AppContent() {
           
           // Handle foreground messages
           const unsubscribeForeground = messaging.onMessage(async (remoteMessage: any) => {
-            console.log('📱 Foreground FCM message received:', remoteMessage);
-            
-            const notification = remoteMessage.notification;
-            const data = remoteMessage.data || {};
-            
-            if (notification) {
-              // Display notification using Notifee
-              if (notifee) {
-                try {
-                  await notifee.displayNotification({
-                    title: notification.title || 'הודעה חדשה',
-                    body: notification.body || '',
-                    android: {
-                      channelId: 'default',
-                      importance: AndroidImportance?.HIGH || 4,
-                      sound: 'default',
-                      vibrationPattern: [300, 500],
-                      pressAction: {
-                        id: 'default',
+            try {
+              console.log('📱 Foreground FCM message received:', remoteMessage);
+              
+              if (!remoteMessage) return;
+              
+              const notification = remoteMessage.notification;
+              const data = remoteMessage.data || {};
+              
+              if (notification) {
+                // Display notification using Notifee
+                if (notifee) {
+                  try {
+                    await notifee.displayNotification({
+                      title: notification.title || 'הודעה חדשה',
+                      body: notification.body || '',
+                      android: {
+                        channelId: 'default',
+                        importance: AndroidImportance?.HIGH || 4,
+                        sound: 'default',
+                        vibrationPattern: [300, 500],
+                        pressAction: {
+                          id: 'default',
+                        },
                       },
-                    },
-                    data: data,
-                  });
-                } catch (notifError) {
-                  console.warn('Error displaying notification:', notifError);
+                      data: data,
+                    });
+                  } catch (notifError) {
+                    console.warn('Error displaying notification:', notifError);
+                  }
                 }
               }
+            } catch (error) {
+              console.warn('Error handling foreground message:', error);
             }
           });
 
           // Handle notification taps (when app is opened from notification)
           messaging.onNotificationOpenedApp((remoteMessage: any) => {
-            console.log('📱 Notification opened app:', remoteMessage);
-            const data = remoteMessage.data || {};
-            const notificationType = data.type;
-            
-            if (notificationType === 'maintenance_task' && data.task_id) {
-              // Navigate to maintenance task detail
-              const taskId = data.task_id;
-              // Find the unit that contains this task
-              const unitWithTask = maintenanceUnits.find(unit => 
-                unit.tasks.some(task => task.id === taskId)
-              );
-              if (unitWithTask) {
-                setSelectedMaintenanceUnitId(unitWithTask.id);
-                setSelectedMaintenanceTaskId(taskId);
-                setScreen('maintenanceTaskDetail');
-              } else {
-                // If task not found, navigate to maintenance screen
-                setScreen('maintenance');
-              }
-            } else if (notificationType === 'chat_message') {
-              // Navigate to chat screen
-              setScreen('chat');
-            }
-          });
-
-          // Check if app was opened from a notification (when app was closed)
-          messaging.getInitialNotification().then((remoteMessage: any) => {
-            if (remoteMessage) {
-              console.log('📱 App opened from notification:', remoteMessage);
+            try {
+              console.log('📱 Notification opened app:', remoteMessage);
+              if (!remoteMessage) return;
+              
               const data = remoteMessage.data || {};
               const notificationType = data.type;
               
               if (notificationType === 'maintenance_task' && data.task_id) {
+                // Navigate to maintenance task detail
                 const taskId = data.task_id;
+                // Find the unit that contains this task
                 const unitWithTask = maintenanceUnits.find(unit => 
                   unit.tasks.some(task => task.id === taskId)
                 );
@@ -629,13 +612,47 @@ function AppContent() {
                   setSelectedMaintenanceTaskId(taskId);
                   setScreen('maintenanceTaskDetail');
                 } else {
+                  // If task not found, navigate to maintenance screen
                   setScreen('maintenance');
                 }
               } else if (notificationType === 'chat_message') {
+                // Navigate to chat screen
                 setScreen('chat');
               }
+            } catch (error) {
+              console.warn('Error handling notification tap:', error);
             }
           });
+
+          // Check if app was opened from a notification (when app was closed)
+          messaging.getInitialNotification()
+            .then((remoteMessage: any) => {
+              if (remoteMessage) {
+                console.log('📱 App opened from notification:', remoteMessage);
+                const data = remoteMessage.data || {};
+                const notificationType = data.type;
+                
+                if (notificationType === 'maintenance_task' && data.task_id) {
+                  const taskId = data.task_id;
+                  const unitWithTask = maintenanceUnits.find(unit => 
+                    unit.tasks.some(task => task.id === taskId)
+                  );
+                  if (unitWithTask) {
+                    setSelectedMaintenanceUnitId(unitWithTask.id);
+                    setSelectedMaintenanceTaskId(taskId);
+                    setScreen('maintenanceTaskDetail');
+                  } else {
+                    setScreen('maintenance');
+                  }
+                } else if (notificationType === 'chat_message') {
+                  setScreen('chat');
+                }
+              }
+            })
+            .catch((error: any) => {
+              // Silently handle errors - this is expected if no initial notification exists
+              console.log('No initial notification or error getting it:', error?.message || 'Unknown error');
+            });
 
           // Cleanup on unmount
           return () => {
@@ -839,7 +856,9 @@ function AppContent() {
     });
     
     // Convert to array and show all units (not just ones with orders)
+    // Filter out "לא צוין" (Not Specified) unit
     return Array.from(unitMap.values())
+      .filter(unit => unit.unitName !== 'לא צוין')
       .sort((a, b) => a.unitName.localeCompare(b.unitName));
   }, [orders]);
 
@@ -1815,10 +1834,22 @@ function AppContent() {
                 (currentUserId && currentAssignedTo === currentUserId)
               );
             
-            // Check both the original set and the new set to prevent duplicates in the same polling cycle
+            // Only notify if:
+            // 1. Task is assigned to me
+            // 2. I haven't been notified about this task before
+            // 3. This is a NEW assignment (task was NOT assigned to me before, but now it is)
+            //    OR task didn't exist in previous check (truly new task)
             if (isAssignedToMe && !notifiedTaskIds.has(t.id) && !newNotifiedIds.has(t.id)) {
-              // Check if this is a new assignment (task didn't exist before OR assignment changed to me)
-              const isNewAssignment = !prevTask || (prevAssignedTo !== currentAssignedTo);
+              // Check if this is a new assignment:
+              // - Task didn't exist before (truly new task) OR
+              // - Task existed but was assigned to someone else (or unassigned) and now assigned to me
+              const wasAssignedToMeBefore = prevTask && (
+                prevAssignedTo === userName || 
+                (currentUserId && prevAssignedTo === currentUserId)
+              );
+              
+              // Only notify if it's a new assignment (wasn't assigned to me before)
+              const isNewAssignment = !prevTask || !wasAssignedToMeBefore;
               
               if (isNewAssignment) {
                 // Add to notified set immediately to prevent duplicate notifications
@@ -2414,15 +2445,25 @@ function AppContent() {
         ? currentPaidAmount + paymentAmount 
         : totalAmount; // If no amount specified, pay full amount
       
-      // Determine if order should be fully closed
-      const shouldCloseOrder = newPaidAmount >= totalAmount;
+      // Determine the correct status based on payment amount
+      let newStatus: OrderStatus;
+      if (newPaidAmount >= totalAmount) {
+        // Fully paid
+        newStatus = 'שולם';
+      } else if (newPaidAmount > 0) {
+        // Partially paid
+        newStatus = 'שולם חלקית';
+      } else {
+        // No payment, keep current status or default to 'חדש'
+        newStatus = (currentOrder?.status || 'חדש') as OrderStatus;
+      }
       
       const res = await fetch(`${API_BASE_URL}/api/orders/${orderId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           paid_amount: newPaidAmount,
-          status: shouldCloseOrder ? 'שולם' : (currentOrder?.status || 'חדש'),
+          status: newStatus,
           payment_method: paymentMethod,
         }),
       });
@@ -2436,7 +2477,7 @@ function AppContent() {
       // Update local state
       updateOrder(orderId, {
         paidAmount: newPaidAmount,
-        status: shouldCloseOrder ? 'שולם' : (currentOrder?.status || 'חדש'),
+        status: newStatus,
         paymentMethod: paymentMethod,
       });
     } catch (err: any) {
@@ -2488,7 +2529,6 @@ function AppContent() {
         departureDate: createdOrder.departure_date || nextWeek,
         status: createdOrder.status || 'חדש',
         guestsCount: createdOrder.guests_count || 0,
-        specialRequests: createdOrder.special_requests || '',
         internalNotes: createdOrder.internal_notes || '',
         paidAmount: createdOrder.paid_amount || 0,
         totalAmount: createdOrder.total_amount || 0,
@@ -2781,17 +2821,15 @@ function AppContent() {
           <View style={styles.quickActions}>
             <Text style={styles.sectionTitle}>אפשרויות</Text>
             <View style={styles.quickActionsRow}>
-              {canSeeEverything && (
-                <Pressable
-                  style={[styles.quickActionBtn, { backgroundColor: '#3b82f6' }]}
-                  onPress={() => setScreen('orders')}
-                >
-                  <View style={{ alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={styles.quickActionIcon}>📑</Text>
-                    <Text style={styles.quickActionText}>הזמנות</Text>
-                  </View>
-                </Pressable>
-              )}
+              <Pressable
+                style={[styles.quickActionBtn, { backgroundColor: '#3b82f6' }]}
+                onPress={() => setScreen('orders')}
+              >
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={styles.quickActionIcon}>📑</Text>
+                  <Text style={styles.quickActionText}>הזמנות</Text>
+                </View>
+              </Pressable>
               <Pressable
                 style={[styles.quickActionBtn, { backgroundColor: '#f97316' }]}
                 onPress={() => setScreen('exitInspections')}
@@ -2939,7 +2977,6 @@ function AppContent() {
         arrival_date: changes.arrivalDate,
         departure_date: changes.departureDate,
         guests_count: changes.guestsCount,
-        special_requests: changes.specialRequests,
         internal_notes: changes.internalNotes,
         opened_by: userName || undefined,
       };
@@ -3369,6 +3406,7 @@ function AppContent() {
       <PaymentConfirmationScreen
         order={order}
         paymentMethod={selectedPaymentMethod || 'אשראי'}
+        paymentAmount={undefined} // Payment amount will be handled by webhook
         onSuccess={async () => {
           // Wait a bit for webhook to process, then reload orders
           await new Promise(resolve => setTimeout(resolve, 500));
@@ -3666,11 +3704,7 @@ function AppContent() {
           </Text>
         </View>
 
-        {orders.length === 0 ? (
-          <View style={styles.emptyOrdersState}>
-            <Text style={styles.emptyOrdersText}>אין הזמנות כרגע</Text>
-          </View>
-        ) : selectedOrderUnit ? (
+        {selectedOrderUnit ? (
           <View>
             <View style={styles.ordersUnitHeader}>
               <Text style={styles.ordersUnitTitle}>הזמנות - {selectedOrderUnit}</Text>
@@ -3828,7 +3862,9 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
   
   const handleCloseWithOther = () => {
     if (selectedPaymentMethod) {
-      handleCloseOrder(selectedPaymentMethod);
+      // Use the selected payment amount (from input) or remaining amount
+      const amountToPay = paymentAmount > 0 ? paymentAmount : (remainingAmount > 0 ? remainingAmount : order.totalAmount);
+      handleCloseOrder(selectedPaymentMethod, amountToPay);
     }
   };
 
@@ -3929,15 +3965,6 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
         </View>
 
         {/* Special Requests */}
-        {order.specialRequests ? (
-          <View style={styles.orderSpecialSection}>
-            <View style={styles.orderSpecialContent}>
-              <Text style={styles.orderSpecialLabel}>בקשות מיוחדות</Text>
-              <Text style={styles.orderSpecialText}>{order.specialRequests}</Text>
-            </View>
-          </View>
-        ) : null}
-
         {/* Internal Notes */}
         {order.internalNotes ? (
           <View style={styles.orderNotesSection}>
@@ -4179,7 +4206,6 @@ type OrderEditProps = {
         | 'arrivalDate'
         | 'departureDate'
         | 'guestsCount'
-        | 'specialRequests'
         | 'internalNotes'
         | 'totalAmount'
       >
@@ -4199,10 +4225,15 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
   const [arrivalDate, setArrivalDate] = useState(order.arrivalDate);
   const [departureDate, setDepartureDate] = useState(order.departureDate);
   const [guestsCount, setGuestsCount] = useState(order.guestsCount.toString());
-  const [specialRequests, setSpecialRequests] = useState(
-    order.specialRequests || '',
-  );
   const [internalNotes, setInternalNotes] = useState(order.internalNotes || '');
+
+  // Helper function to get Hebrew day name
+  const getHebrewDayName = (dateString: string): string => {
+    if (!dateString) return '';
+    const date = new Date(dateString + 'T00:00:00');
+    const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+    return dayNames[date.getDay()];
+  };
   const [addPayment, setAddPayment] = useState('');
   const [statusOpen, setStatusOpen] = useState(false);
   const [methodOpen, setMethodOpen] = useState(false);
@@ -4219,7 +4250,6 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
     setArrivalDate(order.arrivalDate);
     setDepartureDate(order.departureDate);
     setGuestsCount(order.guestsCount.toString());
-    setSpecialRequests(order.specialRequests || '');
     setInternalNotes(order.internalNotes || '');
     setAddPayment('');
     setStatusOpen(false);
@@ -4293,7 +4323,6 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
       arrivalDate: arrivalDate.trim(),
       departureDate: departureDate.trim(),
       guestsCount: Number(guestsCount) || order.guestsCount,
-      specialRequests: specialRequests.trim(),
       internalNotes: internalNotes.trim(),
     });
   };
@@ -4370,7 +4399,14 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
 
           <View style={styles.fieldRow}>
             <View style={[styles.field, styles.fieldHalf]}>
-              <Text style={styles.label}>תאריך הגעה</Text>
+              <Text style={styles.label}>
+                תאריך הגעה
+                {arrivalDate && (
+                  <Text style={{ color: '#3b82f6', fontWeight: '600', marginRight: 8 }}>
+                    {' '}({getHebrewDayName(arrivalDate)})
+                  </Text>
+                )}
+              </Text>
               <TextInput
                 style={styles.input}
                 value={arrivalDate}
@@ -4380,7 +4416,14 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
               />
             </View>
             <View style={[styles.field, styles.fieldHalf]}>
-              <Text style={styles.label}>תאריך עזיבה</Text>
+              <Text style={styles.label}>
+                תאריך עזיבה
+                {departureDate && (
+                  <Text style={{ color: '#3b82f6', fontWeight: '600', marginRight: 8 }}>
+                    {' '}({getHebrewDayName(departureDate)})
+                  </Text>
+                )}
+              </Text>
               <TextInput
                 style={styles.input}
                 value={departureDate}
@@ -4450,16 +4493,6 @@ function OrderEditScreen({ order, isNewOrder = false, onSave, onCancel, onDelete
 
             </>
           )}
-
-          <Text style={styles.label}>בקשות מיוחדות</Text>
-          <TextInput
-            style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
-            value={specialRequests}
-            onChangeText={setSpecialRequests}
-            multiline
-            placeholder="לדוגמה: בקשה ללול תינוק"
-            textAlign="right"
-          />
 
           <Text style={styles.label}>הערות פנימיות</Text>
           <TextInput
@@ -11911,6 +11944,7 @@ function OptionCard({
 type PaymentConfirmationScreenProps = {
   order: Order;
   paymentMethod: string;
+  paymentAmount?: number; // Amount that was paid
   onSuccess: () => void;
   onBack: () => void;
   safeAreaInsets: { top: number };
@@ -11920,6 +11954,7 @@ type PaymentConfirmationScreenProps = {
 function PaymentConfirmationScreen({
   order,
   paymentMethod,
+  paymentAmount,
   onSuccess,
   onBack,
   safeAreaInsets,
@@ -11932,11 +11967,32 @@ function PaymentConfirmationScreen({
   useEffect(() => {
     const confirmPayment = async () => {
       try {
+        // Calculate new paid amount (add payment amount to existing)
+        const currentPaidAmount = order.paidAmount || 0;
+        const totalAmount = order.totalAmount || 0;
+        const newPaidAmount = paymentAmount 
+          ? currentPaidAmount + paymentAmount 
+          : totalAmount; // If no amount specified, assume full payment
+        
+        // Determine the correct status based on payment amount
+        let newStatus: OrderStatus;
+        if (newPaidAmount >= totalAmount) {
+          // Fully paid
+          newStatus = 'שולם';
+        } else if (newPaidAmount > 0) {
+          // Partially paid
+          newStatus = 'שולם חלקית';
+        } else {
+          // No payment, keep current status
+          newStatus = order.status;
+        }
+        
         const res = await fetch(`${API_BASE_URL}/api/orders/${order.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            status: 'שולם',
+            paid_amount: newPaidAmount,
+            status: newStatus,
             payment_method: paymentMethod,
           }),
         });
