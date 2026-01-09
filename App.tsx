@@ -9723,29 +9723,68 @@ function MaintenanceTaskDetailScreen({
         
         // Use FormData for direct upload (works with file:// URIs in React Native)
         const formData = new FormData();
-        formData.append('file', {
+        
+        // For React Native, ensure the file object has the correct format
+        const fileObject: any = {
           uri: fileUri,
           type: mimeType,
           name: fileName || `media-${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`,
-        } as any);
+        };
         
-        const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
-          method: 'POST',
-          body: formData,
-          headers: {
-            // Don't set Content-Type - let FormData set it with boundary
-          },
-        });
-        
-        if (!res.ok) {
-          const errText = await res.text().catch(() => '');
-          throw new Error(`Storage upload failed: ${errText}`);
+        // On Android, ensure the URI format is correct
+        if (Platform.OS === 'android' && fileUri.startsWith('file://')) {
+          fileObject.uri = fileUri;
+        } else if (Platform.OS === 'android' && !fileUri.startsWith('file://') && !fileUri.startsWith('http')) {
+          fileObject.uri = `file://${fileUri}`;
         }
         
-        const data = await res.json();
-        return data.url;
+        formData.append('file', fileObject);
+        
+        console.log(`[Upload] Uploading ${isVideo ? 'video' : 'image'} to ${API_BASE_URL}/api/storage/upload`);
+        console.log(`[Upload] File URI: ${fileObject.uri}, Type: ${mimeType}`);
+        
+        // Add timeout to prevent hanging requests (2 minutes for large videos)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 120000);
+        
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+            headers: {
+              // Don't set Content-Type - let FormData set it with boundary
+              'Accept': 'application/json',
+            },
+          });
+          
+          clearTimeout(timeoutId);
+          
+          if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            console.error(`[Upload] Server error: ${res.status} - ${errText}`);
+            throw new Error(`Storage upload failed: ${errText || `HTTP ${res.status}`}`);
+          }
+          
+          const data = await res.json();
+          console.log(`[Upload] Success: ${data.url}`);
+          return data.url;
+        } catch (fetchErr: any) {
+          clearTimeout(timeoutId);
+          if (fetchErr.name === 'AbortError') {
+            throw new Error('Upload timeout: File is too large or connection is too slow');
+          }
+          throw fetchErr;
+        }
       } catch (err: any) {
         console.error('Error uploading file to storage:', err);
+        // Provide more detailed error message
+        if (err.message && (err.message.includes('Network request failed') || err.message.includes('NetworkError'))) {
+          throw new Error(`Network error: Check your internet connection and API URL (${API_BASE_URL}). Make sure the backend is accessible.`);
+        }
+        if (err.name === 'AbortError') {
+          throw new Error('Upload timeout: File is too large or connection is too slow');
+        }
         throw new Error(`Upload failed: ${err.message}`);
       }
     }
@@ -10633,29 +10672,68 @@ function NewMaintenanceTaskScreen({
         
         // Use FormData for direct upload (works with file:// URIs in React Native)
         const formData = new FormData();
-        formData.append('file', {
+        
+        // For React Native, ensure the file object has the correct format
+        const fileObject: any = {
           uri: fileUri,
           type: mimeType,
           name: fileName || `media-${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`,
-        } as any);
+        };
         
-        const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
-          method: 'POST',
-          body: formData,
-          headers: {
-            // Don't set Content-Type - let FormData set it with boundary
-          },
-        });
-        
-        if (!res.ok) {
-          const errText = await res.text().catch(() => '');
-          throw new Error(`Storage upload failed: ${errText}`);
+        // On Android, ensure the URI format is correct
+        if (Platform.OS === 'android' && fileUri.startsWith('file://')) {
+          fileObject.uri = fileUri;
+        } else if (Platform.OS === 'android' && !fileUri.startsWith('file://') && !fileUri.startsWith('http')) {
+          fileObject.uri = `file://${fileUri}`;
         }
         
-        const data = await res.json();
-        return data.url;
+        formData.append('file', fileObject);
+        
+        console.log(`[Upload] Uploading ${isVideo ? 'video' : 'image'} to ${API_BASE_URL}/api/storage/upload`);
+        console.log(`[Upload] File URI: ${fileObject.uri}, Type: ${mimeType}`);
+        
+        // Add timeout to prevent hanging requests (2 minutes for large videos)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 120000);
+        
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+            headers: {
+              // Don't set Content-Type - let FormData set it with boundary
+              'Accept': 'application/json',
+            },
+          });
+          
+          clearTimeout(timeoutId);
+          
+          if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            console.error(`[Upload] Server error: ${res.status} - ${errText}`);
+            throw new Error(`Storage upload failed: ${errText || `HTTP ${res.status}`}`);
+          }
+          
+          const data = await res.json();
+          console.log(`[Upload] Success: ${data.url}`);
+          return data.url;
+        } catch (fetchErr: any) {
+          clearTimeout(timeoutId);
+          if (fetchErr.name === 'AbortError') {
+            throw new Error('Upload timeout: File is too large or connection is too slow');
+          }
+          throw fetchErr;
+        }
       } catch (err: any) {
         console.error('Error uploading file to storage:', err);
+        // Provide more detailed error message
+        if (err.message && (err.message.includes('Network request failed') || err.message.includes('NetworkError'))) {
+          throw new Error(`Network error: Check your internet connection and API URL (${API_BASE_URL}). Make sure the backend is accessible.`);
+        }
+        if (err.name === 'AbortError') {
+          throw new Error('Upload timeout: File is too large or connection is too slow');
+        }
         throw new Error(`Upload failed: ${err.message}`);
       }
     }
@@ -10669,26 +10747,55 @@ function NewMaintenanceTaskScreen({
     // For other cases, try direct upload
     try {
       const formData = new FormData();
-      formData.append('file', {
+      const fileObject: any = {
         uri: fileUri,
         type: mimeType,
         name: fileName || `media-${Date.now()}.${mimeType.includes('video') ? 'mp4' : 'jpg'}`,
-      } as any);
+      };
       
-      const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        throw new Error(`Storage upload failed: ${errText}`);
+      if (Platform.OS === 'android' && !fileUri.startsWith('file://') && !fileUri.startsWith('http')) {
+        fileObject.uri = `file://${fileUri}`;
       }
       
-      const data = await res.json();
-      return data.url;
+      formData.append('file', fileObject);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 1 minute for other files
+      
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(`Storage upload failed: ${errText}`);
+        }
+        
+        const data = await res.json();
+        return data.url;
+      } catch (fetchErr: any) {
+        clearTimeout(timeoutId);
+        if (fetchErr.name === 'AbortError') {
+          throw new Error('Upload timeout: Connection is too slow');
+        }
+        throw fetchErr;
+      }
     } catch (err: any) {
       console.error('Error uploading file:', err);
+      if (err.message && (err.message.includes('Network request failed') || err.message.includes('NetworkError'))) {
+        throw new Error(`Network error: Check your internet connection and API URL (${API_BASE_URL})`);
+      }
+      if (err.name === 'AbortError') {
+        throw new Error('Upload timeout: Connection is too slow');
+      }
       throw new Error(`Upload failed: ${err.message}`);
     }
   };
