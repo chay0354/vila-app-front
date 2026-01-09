@@ -3845,14 +3845,12 @@ function OrderCard({ order, onEdit, onClose }: OrderCardProps) {
     
     // Open Cardcom payment page in browser
     try {
-      const canOpen = await Linking.canOpenURL(paymentUrl);
-      if (canOpen) {
-        await Linking.openURL(paymentUrl);
-      } else {
-        Alert.alert('שגיאה', 'לא ניתן לפתוח את דף התשלום');
-      }
+      // On Android, canOpenURL can return false for valid HTTPS URLs
+      // So we try to open directly and catch errors
+      await Linking.openURL(paymentUrl);
     } catch (error) {
-      Alert.alert('שגיאה', 'אירעה שגיאה בפתיחת דף התשלום');
+      Alert.alert('שגיאה', 'לא ניתן לפתוח את דף התשלום. אנא נסה שוב.');
+      console.error('Error opening payment URL:', error);
     }
     
     setShowCloseModal(false);
