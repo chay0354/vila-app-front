@@ -563,6 +563,16 @@ function AppContent() {
               const notification = remoteMessage.notification;
               const data = remoteMessage.data || {};
               
+              // If this is a maintenance task notification, mark it as notified
+              // to prevent duplicate notifications from polling
+              if (data.type === 'maintenance_task' && data.task_id) {
+                setNotifiedTaskIds(prev => {
+                  const newSet = new Set(prev);
+                  newSet.add(data.task_id);
+                  return newSet;
+                });
+              }
+              
               if (notification) {
                 // Display notification using Notifee
                 if (notifee) {
@@ -600,7 +610,15 @@ function AppContent() {
               const data = remoteMessage.data || {};
               const notificationType = data.type;
               
+              // If this is a maintenance task notification, mark it as notified
+              // to prevent duplicate notifications from polling
               if (notificationType === 'maintenance_task' && data.task_id) {
+                setNotifiedTaskIds(prev => {
+                  const newSet = new Set(prev);
+                  newSet.add(data.task_id);
+                  return newSet;
+                });
+                
                 // Navigate to maintenance task detail
                 const taskId = data.task_id;
                 // Find the unit that contains this task
@@ -632,7 +650,15 @@ function AppContent() {
                 const data = remoteMessage.data || {};
                 const notificationType = data.type;
                 
+                // If this is a maintenance task notification, mark it as notified
+                // to prevent duplicate notifications from polling
                 if (notificationType === 'maintenance_task' && data.task_id) {
+                  setNotifiedTaskIds(prev => {
+                    const newSet = new Set(prev);
+                    newSet.add(data.task_id);
+                    return newSet;
+                  });
+                  
                   const taskId = data.task_id;
                   const unitWithTask = maintenanceUnits.find(unit => 
                     unit.tasks.some(task => task.id === taskId)
