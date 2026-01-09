@@ -9,13 +9,11 @@ let apiUrl: string | null = null;
 // Use VITE_API_BASE_URL from .env file
 if (VITE_API_BASE_URL) {
   apiUrl = VITE_API_BASE_URL;
-  console.log(`[API Config] Loaded VITE_API_BASE_URL from .env: ${apiUrl}`);
 } else {
   console.error('ERROR: VITE_API_BASE_URL not found in .env file!');
   console.error('Please add to your .env file in the front/ directory:');
-  console.error('  VITE_API_BASE_URL=https://vila-app-back.vercel.app');
+  console.error('  VITE_API_BASE_URL=http://127.0.0.1:4000');
   console.error('  (For Android emulator use: http://10.0.2.2:4000)');
-  console.error('  (For local development use: http://127.0.0.1:4000)');
   throw new Error('VITE_API_BASE_URL is required in .env file');
 }
 
@@ -25,8 +23,6 @@ if (!apiUrl) {
 
 // Remove all trailing slashes - endpoints already start with /
 apiUrl = String(apiUrl).trim().replace(/\/+$/, '');
-console.log(`[API Config] Using backend URL: ${apiUrl}`);
-console.log(`[API Config] Environment variable VITE_API_BASE_URL: ${VITE_API_BASE_URL}`);
-
+console.log(`[API Config] Using backend URL from .env: ${apiUrl}`);
 export const API_BASE_URL = apiUrl;
 
