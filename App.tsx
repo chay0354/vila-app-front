@@ -28,38 +28,67 @@ import Video from 'react-native-video';
 import RNFS from 'react-native-fs';
 import { WebView } from 'react-native-webview';
 
-// Helper function to upload video file and get data URI from backend
-// For videos, we upload directly as multipart/form-data to avoid memory issues
-// The backend converts it to a data URI and returns it
-const uploadVideoAndGetDataUri = async (fileUri: string, mimeType: string = 'video/mp4'): Promise<string> => {
+// Helper function to upload file directly to Supabase Storage using REST API
+const uploadFileToSupabaseStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
   try {
-    // If it's already a data URI, return it
-    if (fileUri.startsWith('data:')) {
+    // If it's already a URL (already uploaded), return it
+    if (fileUri.startsWith('http://') || fileUri.startsWith('https://')) {
       return fileUri;
     }
     
-    // For file URIs, upload to backend using multipart/form-data
-    // Create FormData with the file
-    const formData = new FormData();
+    const fileExt = mimeType.includes('video') ? (mimeType.includes('mp4') ? 'mp4' : 'mov') : 
+                   (mimeType.includes('png') ? 'png' : 'jpg');
+    const uploadFileName = fileName || `media-${Date.now()}.${fileExt}`;
+    const bucketName = mimeType.includes('video') ? 'vidoes' : 'images';
     
-    // In React Native, we need to create a file object
-    // The file URI should work directly with fetch
-    formData.append('media', {
-      uri: fileUri,
-      type: mimeType,
-      name: `video-${Date.now()}.${mimeType.includes('mp4') ? 'mp4' : 'mov'}`,
-    } as any);
+    let fileData: Uint8Array;
     
-    // Upload to a temporary endpoint that converts to data URI
-    // For now, we'll use the maintenance task endpoint structure
-    // Actually, let's just return the file URI and let the upload handle it
-    // The backend can accept multipart uploads
+    // If it's a data URI, extract and convert base64 data
+    if (fileUri.startsWith('data:')) {
+      const base64Data = fileUri.split(',')[1];
+      const binaryString = atob(base64Data);
+      fileData = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        fileData[i] = binaryString.charCodeAt(i);
+      }
+    } 
+    // For file:// URIs, read file as base64 then convert
+    else if (fileUri.startsWith('file://')) {
+      const filePath = fileUri.replace('file://', '');
+      const base64Data = await RNFS.readFile(filePath, 'base64');
+      const binaryString = atob(base64Data);
+      fileData = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        fileData[i] = binaryString.charCodeAt(i);
+      }
+    } else {
+      throw new Error('Unsupported file URI format');
+    }
     
-    // For now, return file URI - we'll handle upload at the task level
-    return fileUri;
-  } catch (error) {
-    console.error('Error preparing video upload:', error);
-    return fileUri;
+    // Upload to Supabase Storage using REST API (send binary data as body)
+    // Use service role key to bypass RLS policies
+    const response = await fetch(`${SUPABASE_URL}/storage/v1/object/${bucketName}/${uploadFileName}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+        'Content-Type': mimeType,
+        'x-upsert': 'true',
+      },
+      body: fileData,
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`Supabase upload failed: ${errorText}`);
+    }
+    
+    // Get public URL
+    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${bucketName}/${uploadFileName}`;
+    return publicUrl;
+  } catch (error: any) {
+    console.error('Error uploading to Supabase Storage:', error);
+    throw new Error(`Upload failed: ${error.message}`);
   }
 };
 
@@ -134,6 +163,10 @@ try {
 }
 
 import { API_BASE_URL } from './src/apiConfig';
+
+// Supabase Storage configuration
+const SUPABASE_URL = 'https://szeorawtqqisokuxbihm.supabase.co';
+const SUPABASE_SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN6ZW9yYXd0cXFpc29rdXhiaWhtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NTc3MjEwNywiZXhwIjoyMDgxMzQ4MTA3fQ.DPV83UgJMZkwzElHG0ErVvedcucC3gj6AfRUPFJx5hE';
 
 type Screen = 'home' | 'signin' | 'signup' | 'hub' | 'orders' | 'orderEdit' | 'paymentConfirmation' | 'exitInspections' | 'cleaningInspections' | 'monthlyInspections' | 'warehouse' | 'warehouseMenu' | 'warehouseOrders' | 'warehouseInventory' | 'warehouseInventoryDetail' | 'newWarehouse' | 'newWarehouseItem' | 'newWarehouseOrder' | 'maintenance' | 'maintenanceTasks' | 'maintenanceTaskDetail' | 'newMaintenanceTask' | 'reports' | 'chat' | 'attendance' | 'invoices' | 'cleaningSchedule' | 'employeeManagement';
 type OrderStatus = 'חדש' | 'באישור' | 'שולם חלקית' | 'שולם' | 'בוטל';
@@ -9756,79 +9789,9 @@ function MaintenanceTaskDetailScreen({
     setVideoError(null);
   }, [fullTask.id, fullTask.imageUri]);
 
-  // Helper function to upload file to storage (like PWA)
+  // Helper function to upload file to Supabase Storage
   const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
-    // In React Native, FormData with file:// URIs doesn't work reliably
-    // For large files (>10MB), upload directly to avoid memory issues
-    if (fileUri.startsWith('file://')) {
-      try {
-        const filePath = fileUri.replace('file://', '');
-        const stat = await RNFS.stat(filePath);
-        const fileSizeMB = stat.size / (1024 * 1024);
-        
-        // If file is too large (>10MB), upload directly via FormData
-        if (fileSizeMB > 10) {
-          const formData = new FormData();
-          formData.append('file', {
-            uri: fileUri,
-            type: mimeType,
-            name: fileName || `media-${Date.now()}.${mimeType.includes('video') ? 'mp4' : 'jpg'}`,
-          } as any);
-          
-          const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
-            method: 'POST',
-            body: formData,
-          });
-          
-          if (!res.ok) {
-            const errText = await res.text().catch(() => '');
-            throw new Error(`Storage upload failed: ${errText}`);
-          }
-          
-          const data = await res.json();
-          return data.url;
-        }
-        
-        // For smaller files, use base64 conversion
-        const base64Data = await RNFS.readFile(filePath, 'base64');
-        return `data:${mimeType};base64,${base64Data}`;
-      } catch (err: any) {
-        console.error('Error reading file for base64 conversion:', err);
-        throw new Error(`Failed to read file: ${err.message}`);
-      }
-    }
-    
-    // For non-file:// URIs (e.g., data URIs or HTTP URLs), try direct upload
-    try {
-      const formData = new FormData();
-      formData.append('file', {
-        uri: fileUri,
-        type: mimeType,
-        name: fileName || `media-${Date.now()}.${mimeType.includes('video') ? 'mp4' : 'jpg'}`,
-      } as any);
-      
-      const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        throw new Error(`Storage upload failed: ${errText}`);
-      }
-      
-      const data = await res.json();
-      return data.url;
-    } catch (err: any) {
-      // If direct upload fails and it's not a file:// URI, try base64 as fallback
-      if (fileUri.startsWith('data:')) {
-        // Already a data URI, return as-is
-        return fileUri;
-      }
-      console.warn('Direct upload failed, using data URI fallback');
-      // For other cases, try to convert to base64 if possible
-      throw new Error(`Upload failed: ${err.message}`);
-    }
+    return uploadFileToSupabaseStorage(fileUri, mimeType, fileName);
   };
 
   const handleOpenCloseModal = () => {
@@ -9861,9 +9824,15 @@ function MaintenanceTaskDetailScreen({
                 return;
               }
               const mime = asset.type || 'image/jpeg';
-              const uri = asset.base64 
-                ? `data:${mime};base64,${asset.base64}` 
-                : asset.uri;
+              
+              // Upload to Supabase Storage immediately
+              let uri: string;
+              if (asset.base64) {
+                uri = await uploadFileToStorage(`data:${mime};base64,${asset.base64}`, mime, asset.fileName);
+              } else {
+                uri = await uploadFileToStorage(asset.uri, mime, asset.fileName);
+              }
+              
               setCloseModalImageUri(uri);
               // Automatically close the task when media is uploaded
               await onUpdateTask(task.id, { status: 'סגור', imageUri: uri });
@@ -9899,29 +9868,18 @@ function MaintenanceTaskDetailScreen({
               }
               const mime = asset.type || 'video/mp4';
               
-              // Show video immediately from local storage
-              setCloseModalImageUri(asset.uri);
-              
-              // Close task immediately with local URI, upload in background
+              // Upload to Supabase Storage immediately
               setIsUploadingClose(true);
               try {
-                await onUpdateTask(task.id, { status: 'סגור', imageUri: asset.uri });
+                const mediaUrl = await uploadFileToStorage(asset.uri, mime, asset.fileName);
+                setCloseModalImageUri(mediaUrl);
+                
+                // Close task with uploaded URL
+                await onUpdateTask(task.id, { status: 'סגור', imageUri: mediaUrl });
                 Alert.alert('הצלחה', 'המשימה נסגרה בהצלחה');
                 setShowCloseModal(false);
                 setIsUploadingClose(false);
                 onBack();
-                
-                // Upload to storage in background and update task
-                uploadFileToStorage(asset.uri, mime, asset.fileName)
-                  .then((mediaUrl) => {
-                    // Update task with uploaded URL
-                    onUpdateTask(task.id, { imageUri: mediaUrl }).catch(() => {
-                      // Ignore update errors - task is already closed
-                    });
-                  })
-                  .catch((err: any) => {
-                    console.error('Background upload failed (non-critical):', err);
-                  });
               } catch (err: any) {
                 setIsUploadingClose(false);
                 console.error('Error closing task:', err);
@@ -9963,9 +9921,15 @@ function MaintenanceTaskDetailScreen({
                 return;
               }
               const mime = asset.type || 'image/jpeg';
-              const uri = asset.base64 
-                ? `data:${mime};base64,${asset.base64}` 
-                : asset.uri;
+              
+              // Upload to Supabase Storage immediately
+              let uri: string;
+              if (asset.base64) {
+                uri = await uploadFileToStorage(`data:${mime};base64,${asset.base64}`, mime, asset.fileName);
+              } else {
+                uri = await uploadFileToStorage(asset.uri, mime, asset.fileName);
+              }
+              
               setEditMediaUri(uri);
               setHasNewMedia(true); // Mark that new media was selected
             } catch (err: any) {
@@ -9990,19 +9954,15 @@ function MaintenanceTaskDetailScreen({
               }
               const mime = asset.type || 'video/mp4';
               
-              // Show video immediately from local storage
-              setEditMediaUri(asset.uri);
-              setHasNewMedia(true);
-              
-              // Upload to storage in background - update URI when done
-              uploadFileToStorage(asset.uri, mime, asset.fileName)
-                .then((mediaUrl) => {
-                  setEditMediaUri(mediaUrl); // Update to uploaded URL
-                })
-                .catch((err: any) => {
-                  console.error('Background upload failed (non-critical):', err);
-                  // Keep using local file URI - user can still save
-                });
+              // Upload to Supabase Storage immediately
+              try {
+                const mediaUrl = await uploadFileToStorage(asset.uri, mime, asset.fileName);
+                setEditMediaUri(mediaUrl);
+                setHasNewMedia(true);
+              } catch (err: any) {
+                console.error('Error uploading video:', err);
+                Alert.alert('שגיאה', err?.message || 'שגיאה בהעלאת הוידאו');
+              }
             } catch (err: any) {
               console.error('Error selecting media:', err);
               Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם וידאו');
@@ -10674,88 +10634,7 @@ function NewMaintenanceTaskScreen({
   }, [assignedTo, userName, systemUsers]);
 
   const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
-    // In React Native, FormData with file:// URIs doesn't work reliably
-    // For large files (>10MB), upload directly to avoid memory issues
-    if (fileUri.startsWith('file://')) {
-      try {
-        const filePath = fileUri.replace('file://', '');
-        const stat = await RNFS.stat(filePath);
-        const fileSizeMB = stat.size / (1024 * 1024);
-        
-        // If file is too large (>10MB), upload directly via FormData
-        if (fileSizeMB > 10) {
-          const formData = new FormData();
-          formData.append('file', {
-            uri: fileUri,
-            type: mimeType,
-            name: fileName || `media-${Date.now()}.${mimeType.includes('video') ? 'mp4' : 'jpg'}`,
-          } as any);
-          
-          const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
-            method: 'POST',
-            body: formData,
-          });
-          
-          if (!res.ok) {
-            const errText = await res.text().catch(() => '');
-            throw new Error(`Storage upload failed: ${errText}`);
-          }
-          
-          const data = await res.json();
-          return data.url;
-        }
-        
-        // For smaller files, use base64 conversion
-        // Use Promise with setTimeout to allow UI to update during long operations
-        return new Promise((resolve, reject) => {
-          // Small delay to allow UI to render loading state before blocking operation
-          setTimeout(async () => {
-            try {
-              const base64Data = await RNFS.readFile(filePath, 'base64');
-              resolve(`data:${mimeType};base64,${base64Data}`);
-            } catch (err: any) {
-              console.error('Error reading file for base64 conversion:', err);
-              reject(new Error(`Failed to read file: ${err.message}`));
-            }
-          }, 50);
-        });
-      } catch (err: any) {
-        console.error('Error reading file for base64 conversion:', err);
-        throw new Error(`Failed to read file: ${err.message}`);
-      }
-    }
-    
-    // For non-file:// URIs (e.g., data URIs or HTTP URLs), try direct upload
-    try {
-      const formData = new FormData();
-      formData.append('file', {
-        uri: fileUri,
-        type: mimeType,
-        name: fileName || `media-${Date.now()}.${mimeType.includes('video') ? 'mp4' : 'jpg'}`,
-      } as any);
-      
-      const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        throw new Error(`Storage upload failed: ${errText}`);
-      }
-      
-      const data = await res.json();
-      return data.url;
-    } catch (err: any) {
-      // If direct upload fails and it's not a file:// URI, try base64 as fallback
-      if (fileUri.startsWith('data:')) {
-        // Already a data URI, return as-is
-        return fileUri;
-      }
-      console.warn('Direct upload failed, using data URI fallback');
-      // For other cases, try to convert to base64 if possible
-      throw new Error(`Upload failed: ${err.message}`);
-    }
+    return uploadFileToSupabaseStorage(fileUri, mimeType, fileName);
   };
 
   const handlePickMedia = async () => {
@@ -10785,13 +10664,13 @@ function NewMaintenanceTaskScreen({
               const mime = asset.type || 'image/jpeg';
               const name = asset.fileName || `media-${Date.now()}`;
               
-              // Upload to storage immediately (like PWA)
+              // Upload to Supabase Storage immediately
               let finalUri: string;
               if (asset.base64) {
-                // If base64 is available, use it directly (backend will convert to storage)
-                finalUri = `data:${mime};base64,${asset.base64}`;
+                // Upload base64 data to Supabase Storage
+                finalUri = await uploadFileToStorage(`data:${mime};base64,${asset.base64}`, mime, name);
               } else {
-                // Upload file:// URI to storage
+                // Upload file:// URI to Supabase Storage
                 finalUri = await uploadFileToStorage(asset.uri, mime, name);
               }
               
@@ -10823,22 +10702,18 @@ function NewMaintenanceTaskScreen({
               const mime = asset.type || 'video/mp4';
               const name = asset.fileName || `media-${Date.now()}`;
               
-              // Set media immediately for preview from local storage
-              setMedia({ uri: asset.uri, type: mime, name });
-              setMediaUri(asset.uri); // Show local file immediately
-              
-              // Upload to storage in background - update URI when done
+              // Upload to Supabase Storage immediately
               setIsUploadingMedia(true);
-              uploadFileToStorage(asset.uri, mime, name)
-                .then((finalUri) => {
-                  setMediaUri(finalUri); // Update to uploaded URL
-                  setIsUploadingMedia(false);
-                })
-                .catch((uploadErr: any) => {
-                  console.error('Error uploading video:', uploadErr);
-                  // Keep using local file URI - user can still save the task
-                  setIsUploadingMedia(false);
-                });
+              try {
+                const finalUri = await uploadFileToStorage(asset.uri, mime, name);
+                setMedia({ uri: asset.uri, type: mime, name });
+                setMediaUri(finalUri);
+                setIsUploadingMedia(false);
+              } catch (uploadErr: any) {
+                console.error('Error uploading video:', uploadErr);
+                setIsUploadingMedia(false);
+                Alert.alert('שגיאה', uploadErr?.message || 'שגיאה בהעלאת הוידאו');
+              }
             } catch (err: any) {
               setIsUploadingMedia(false);
               Alert.alert('שגיאה', err?.message || 'לא ניתן לצלם וידאו');
@@ -10864,61 +10739,41 @@ function NewMaintenanceTaskScreen({
       return;
     }
 
-    // Use local file URI immediately (from media.uri) - don't wait for upload
-    // This allows task creation to be instant while upload happens in background
-    const localMediaUri = media?.uri || mediaUri;
-
-    const newTask: MaintenanceTask = {
-      id: `task-${Date.now()}`,
-      unitId: unit.id,
-      title: description.substring(0, 100), // Use description as title since title field is removed
-      description,
-      status: 'פתוח',
-      createdDate: new Date().toISOString().split('T')[0],
-      assignedTo,
-      room: room || undefined,
-      media: localMediaUri ? { uri: localMediaUri, type: media?.type || 'image/jpeg', name: media?.name } : null,
-    };
-
-    // Save task immediately with local URI - don't wait for upload
-    await onSave(newTask, setIsSaving);
-    
-    // If we have a local file URI (file://) and it's not already uploaded, upload in background
-    if (localMediaUri && localMediaUri.startsWith('file://') && media) {
-      const mime = media.type || 'image/jpeg';
-      const name = media.name || `media-${Date.now()}`;
+    try {
+      setIsSaving(true);
       
-      // Upload in background - find the created task and update it
-      uploadFileToStorage(localMediaUri, mime, name)
-        .then(async (uploadedUrl) => {
-          // Fetch tasks to find the one we just created (by description and assignedTo)
-          try {
-            const res = await fetch(`${API_BASE_URL}/api/maintenance/tasks`);
-            if (res.ok) {
-              const tasks = await res.json();
-              const createdTask = tasks.find((t: any) => 
-                t.description === description && 
-                (t.assigned_to || t.assignedTo) === assignedTo &&
-                (!t.image_uri || t.image_uri.startsWith('file://'))
-              );
-              
-              if (createdTask?.id) {
-                // Update task with uploaded URL
-                await fetch(`${API_BASE_URL}/api/maintenance/tasks/${createdTask.id}`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ imageUri: uploadedUrl }),
-                });
-              }
-            }
-          } catch (err) {
-            console.warn('Failed to update task with uploaded media (non-critical):', err);
-          }
-        })
-        .catch((err) => {
-          console.warn('Background upload failed (non-critical):', err);
-          // Task is already saved with local URI, so this is fine
-        });
+      // Upload media to Supabase Storage first (synchronously)
+      let finalMediaUri: string | null = null;
+      if (media || mediaUri) {
+        const localMediaUri = media?.uri || mediaUri;
+        if (localMediaUri && !localMediaUri.startsWith('http://') && !localMediaUri.startsWith('https://')) {
+          // Upload to Supabase Storage and wait for completion
+          const mime = media?.type || (localMediaUri.includes('video') ? 'video/mp4' : 'image/jpeg');
+          const name = media?.name || `media-${Date.now()}`;
+          finalMediaUri = await uploadFileToStorage(localMediaUri, mime, name);
+        } else {
+          // Already a URL, use as-is
+          finalMediaUri = localMediaUri;
+        }
+      }
+
+      const newTask: MaintenanceTask = {
+        id: `task-${Date.now()}`,
+        unitId: unit.id,
+        title: description.substring(0, 100), // Use description as title since title field is removed
+        description,
+        status: 'פתוח',
+        createdDate: new Date().toISOString().split('T')[0],
+        assignedTo,
+        room: room || undefined,
+        media: finalMediaUri ? { uri: finalMediaUri, type: media?.type || 'image/jpeg', name: media?.name } : null,
+      };
+
+      // Save task with uploaded media URL
+      await onSave(newTask, setIsSaving);
+    } catch (err: any) {
+      setIsSaving(false);
+      Alert.alert('שגיאה', err?.message || 'שגיאה בשמירת המשימה');
     }
   };
 
