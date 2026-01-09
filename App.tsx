@@ -1573,9 +1573,9 @@ function AppContent() {
     }
   }, [screen]);
 
-  // Poll for new messages and assignments when user is logged in (but not on chat screen - it has its own polling)
+  // Poll for new messages and assignments when user is logged in (but not on chat screen or task detail - they have their own logic)
   useEffect(() => {
-    if (!userName || screen === 'chat') return;
+    if (!userName || screen === 'chat' || screen === 'maintenanceTaskDetail') return;
     
     // Load maintenance tasks and chat messages periodically
     const pollInterval = setInterval(() => {
@@ -1902,6 +1902,8 @@ function AppContent() {
                 if (isNewAssignment) {
                   // Add to notified set immediately to prevent duplicate notifications
                   newNotifiedIds.add(t.id);
+                  // Always show notification for new assignments (user might be on different screen)
+                  // The polling is already disabled on task detail screens, so this should be fine
                   console.log('[Notifications] Showing notification for new task assignment:', t.id, t.title);
                   showNotification(
                     'משימה חדשה הוקצתה לך',
