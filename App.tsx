@@ -9699,20 +9699,64 @@ function MaintenanceTaskDetailScreen({
 
   // Helper function to upload file to storage (like PWA)
   const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
-    // In React Native, FormData with file:// URIs doesn't work reliably
-    // Skip directly to base64 conversion (backend will convert to storage)
-    if (fileUri.startsWith('file://')) {
+    // For videos, ALWAYS use direct multipart upload to avoid payload size limits
+    // Videos should never be converted to base64 as they exceed function payload limits
+    const isVideo = mimeType.startsWith('video/');
+    
+    // Always use direct upload for videos and file:// URIs
+    if (fileUri.startsWith('file://') || isVideo) {
       try {
-        const filePath = fileUri.replace('file://', '');
-        const base64Data = await RNFS.readFile(filePath, 'base64');
-        return `data:${mimeType};base64,${base64Data}`;
+        // Check file size first for videos
+        if (isVideo && fileUri.startsWith('file://')) {
+          const filePath = fileUri.replace('file://', '');
+          try {
+            const stat = await RNFS.stat(filePath);
+            const fileSizeMB = stat.size / (1024 * 1024);
+            // Warn if file is very large (but still try to upload)
+            if (fileSizeMB > 50) {
+              console.warn(`Video file is large: ${fileSizeMB.toFixed(2)} MB`);
+            }
+          } catch (statErr) {
+            console.warn('Could not check file size:', statErr);
+          }
+        }
+        
+        // Use FormData for direct upload (works with file:// URIs in React Native)
+        const formData = new FormData();
+        formData.append('file', {
+          uri: fileUri,
+          type: mimeType,
+          name: fileName || `media-${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`,
+        } as any);
+        
+        const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            // Don't set Content-Type - let FormData set it with boundary
+          },
+        });
+        
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(`Storage upload failed: ${errText}`);
+        }
+        
+        const data = await res.json();
+        return data.url;
       } catch (err: any) {
-        console.error('Error reading file for base64 conversion:', err);
-        throw new Error(`Failed to read file: ${err.message}`);
+        console.error('Error uploading file to storage:', err);
+        throw new Error(`Upload failed: ${err.message}`);
       }
     }
     
-    // For non-file:// URIs (e.g., data URIs or HTTP URLs), try direct upload
+    // For small images (data URIs), can use base64 as fallback
+    if (fileUri.startsWith('data:')) {
+      // Already a data URI, return as-is (only for small images)
+      return fileUri;
+    }
+    
+    // For other cases, try direct upload
     try {
       const formData = new FormData();
       formData.append('file', {
@@ -9734,13 +9778,7 @@ function MaintenanceTaskDetailScreen({
       const data = await res.json();
       return data.url;
     } catch (err: any) {
-      // If direct upload fails and it's not a file:// URI, try base64 as fallback
-      if (fileUri.startsWith('data:')) {
-        // Already a data URI, return as-is
-        return fileUri;
-      }
-      console.warn('Direct upload failed, using data URI fallback');
-      // For other cases, try to convert to base64 if possible
+      console.error('Error uploading file:', err);
       throw new Error(`Upload failed: ${err.message}`);
     }
   };
@@ -10571,31 +10609,64 @@ function NewMaintenanceTaskScreen({
   }, [assignedTo, userName, systemUsers]);
 
   const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
-    // In React Native, FormData with file:// URIs doesn't work reliably
-    // Skip directly to base64 conversion (backend will convert to storage)
-    if (fileUri.startsWith('file://')) {
+    // For videos, ALWAYS use direct multipart upload to avoid payload size limits
+    // Videos should never be converted to base64 as they exceed function payload limits
+    const isVideo = mimeType.startsWith('video/');
+    
+    // Always use direct upload for videos and large files
+    if (fileUri.startsWith('file://') || isVideo) {
       try {
-        const filePath = fileUri.replace('file://', '');
-        // Use Promise with setTimeout to allow UI to update during long operations
-        return new Promise((resolve, reject) => {
-          // Small delay to allow UI to render loading state before blocking operation
-          setTimeout(async () => {
-            try {
-              const base64Data = await RNFS.readFile(filePath, 'base64');
-              resolve(`data:${mimeType};base64,${base64Data}`);
-            } catch (err: any) {
-              console.error('Error reading file for base64 conversion:', err);
-              reject(new Error(`Failed to read file: ${err.message}`));
+        // Check file size first for videos
+        if (isVideo && fileUri.startsWith('file://')) {
+          const filePath = fileUri.replace('file://', '');
+          try {
+            const stat = await RNFS.stat(filePath);
+            const fileSizeMB = stat.size / (1024 * 1024);
+            // Warn if file is very large (but still try to upload)
+            if (fileSizeMB > 50) {
+              console.warn(`Video file is large: ${fileSizeMB.toFixed(2)} MB`);
             }
-          }, 50);
+          } catch (statErr) {
+            console.warn('Could not check file size:', statErr);
+          }
+        }
+        
+        // Use FormData for direct upload (works with file:// URIs in React Native)
+        const formData = new FormData();
+        formData.append('file', {
+          uri: fileUri,
+          type: mimeType,
+          name: fileName || `media-${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`,
+        } as any);
+        
+        const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            // Don't set Content-Type - let FormData set it with boundary
+          },
         });
+        
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(`Storage upload failed: ${errText}`);
+        }
+        
+        const data = await res.json();
+        return data.url;
       } catch (err: any) {
-        console.error('Error reading file for base64 conversion:', err);
-        throw new Error(`Failed to read file: ${err.message}`);
+        console.error('Error uploading file to storage:', err);
+        throw new Error(`Upload failed: ${err.message}`);
       }
     }
     
-    // For non-file:// URIs (e.g., data URIs or HTTP URLs), try direct upload
+    // For small images (data URIs), can use base64 as fallback
+    if (fileUri.startsWith('data:')) {
+      // Already a data URI, return as-is (only for small images)
+      return fileUri;
+    }
+    
+    // For other cases, try direct upload
     try {
       const formData = new FormData();
       formData.append('file', {
@@ -10617,13 +10688,7 @@ function NewMaintenanceTaskScreen({
       const data = await res.json();
       return data.url;
     } catch (err: any) {
-      // If direct upload fails and it's not a file:// URI, try base64 as fallback
-      if (fileUri.startsWith('data:')) {
-        // Already a data URI, return as-is
-        return fileUri;
-      }
-      console.warn('Direct upload failed, using data URI fallback');
-      // For other cases, try to convert to base64 if possible
+      console.error('Error uploading file:', err);
       throw new Error(`Upload failed: ${err.message}`);
     }
   };
