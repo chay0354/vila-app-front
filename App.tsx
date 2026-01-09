@@ -499,6 +499,7 @@ function AppContent() {
   const [previousMaintenanceTasks, setPreviousMaintenanceTasks] = useState<any[]>([]);
   const [previousChatMessages, setPreviousChatMessages] = useState<Array<{id: number; sender: string; content: string; created_at: string}>>([]);
   const [notifiedTaskIds, setNotifiedTaskIds] = useState<Set<string>>(new Set());
+  const [hasInitializedMaintenanceTasks, setHasInitializedMaintenanceTasks] = useState<boolean>(false);
   
   // Ref to prevent concurrent maintenance tasks requests
   const maintenanceTasksFetchRef = React.useRef<Promise<any[]> | null>(null);
@@ -1848,45 +1849,68 @@ function AppContent() {
             : new Map();
           const newNotifiedIds = new Set(notifiedTaskIds);
           
-          assignments.forEach((t: any) => {
-            const prevTask = previousTasksMap.get(t.id);
-            const currentAssignedTo = (t.assigned_to || '').toString().trim();
-            const prevAssignedTo = prevTask ? ((prevTask.assignedTo || prevTask.assigned_to || '').toString().trim()) : '';
-            
-            // Check if assigned to current user (by username or user ID)
-            const isAssignedToMe = 
-              currentAssignedTo && (
-                currentAssignedTo === userName || 
-                (currentUserId && currentAssignedTo === currentUserId)
-              );
-            
-            // Only notify if:
-            // 1. Task is assigned to me
-            // 2. I haven't been notified about this task before
-            // 3. This is a NEW assignment (task was NOT assigned to me before, but now it is)
-            //    OR task didn't exist in previous check (truly new task)
-            if (isAssignedToMe && !notifiedTaskIds.has(t.id) && !newNotifiedIds.has(t.id)) {
-              // Check if this is a new assignment:
-              // - Task didn't exist before (truly new task) OR
-              // - Task existed but was assigned to someone else (or unassigned) and now assigned to me
-              const wasAssignedToMeBefore = prevTask && (
-                prevAssignedTo === userName || 
-                (currentUserId && prevAssignedTo === currentUserId)
-              );
-              
-              // Only notify if it's a new assignment (wasn't assigned to me before)
-              const isNewAssignment = !prevTask || !wasAssignedToMeBefore;
-              
-              if (isNewAssignment) {
-                // Add to notified set immediately to prevent duplicate notifications
-                newNotifiedIds.add(t.id);
-                showNotification(
-                  'משימה חדשה הוקצתה לך',
-                  `משימת תחזוקה חדשה: ${t.title || 'ללא כותרת'}`
+          // On first load, mark ALL existing assignments as notified (without showing notifications)
+          // This prevents showing notifications for old tasks when the app first opens
+          const isFirstLoad = !hasInitializedMaintenanceTasks && previousMaintenanceTasks.length === 0;
+          
+          if (isFirstLoad) {
+            console.log('[Notifications] First load - marking all existing assignments as notified');
+            assignments.forEach((t: any) => {
+              const currentAssignedTo = (t.assigned_to || '').toString().trim();
+              const isAssignedToMe = 
+                currentAssignedTo && (
+                  currentAssignedTo === userName || 
+                  (currentUserId && currentAssignedTo === currentUserId)
                 );
+              
+              if (isAssignedToMe) {
+                // Mark as notified without showing notification
+                newNotifiedIds.add(t.id);
               }
-            }
-          });
+            });
+            setHasInitializedMaintenanceTasks(true);
+          } else {
+            // After first load, only notify for NEW assignments
+            assignments.forEach((t: any) => {
+              const prevTask = previousTasksMap.get(t.id);
+              const currentAssignedTo = (t.assigned_to || '').toString().trim();
+              const prevAssignedTo = prevTask ? ((prevTask.assignedTo || prevTask.assigned_to || '').toString().trim()) : '';
+              
+              // Check if assigned to current user (by username or user ID)
+              const isAssignedToMe = 
+                currentAssignedTo && (
+                  currentAssignedTo === userName || 
+                  (currentUserId && currentAssignedTo === currentUserId)
+                );
+              
+              // Only notify if:
+              // 1. Task is assigned to me
+              // 2. I haven't been notified about this task before
+              // 3. This is a NEW assignment (task was NOT assigned to me before, but now it is)
+              if (isAssignedToMe && !notifiedTaskIds.has(t.id) && !newNotifiedIds.has(t.id)) {
+                // Check if this is a new assignment:
+                // - Task didn't exist before (truly new task) OR
+                // - Task existed but was assigned to someone else (or unassigned) and now assigned to me
+                const wasAssignedToMeBefore = prevTask && (
+                  prevAssignedTo === userName || 
+                  (currentUserId && prevAssignedTo === currentUserId)
+                );
+                
+                // Only notify if it's a new assignment (wasn't assigned to me before)
+                const isNewAssignment = !prevTask || !wasAssignedToMeBefore;
+                
+                if (isNewAssignment) {
+                  // Add to notified set immediately to prevent duplicate notifications
+                  newNotifiedIds.add(t.id);
+                  console.log('[Notifications] Showing notification for new task assignment:', t.id, t.title);
+                  showNotification(
+                    'משימה חדשה הוקצתה לך',
+                    `משימת תחזוקה חדשה: ${t.title || 'ללא כותרת'}`
+                  );
+                }
+              }
+            });
+          }
           
           setNotifiedTaskIds(newNotifiedIds);
           // Store lightweight assignments for comparison next time
