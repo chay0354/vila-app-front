@@ -10723,6 +10723,9 @@ function NewMaintenanceTaskScreen({
         const timeoutId = setTimeout(() => controller.abort(), 120000);
         
         try {
+          // Verify API URL is accessible before attempting upload
+          console.log(`[Upload] Attempting upload to: ${API_BASE_URL}/api/storage/upload`);
+          
           const res = await fetch(`${API_BASE_URL}/api/storage/upload`, {
             method: 'POST',
             body: formData,
@@ -10738,16 +10741,29 @@ function NewMaintenanceTaskScreen({
           if (!res.ok) {
             const errText = await res.text().catch(() => '');
             console.error(`[Upload] Server error: ${res.status} - ${errText}`);
+            // Provide more helpful error message
+            if (res.status === 413) {
+              throw new Error('File is too large. Please try a smaller video file.');
+            } else if (res.status === 0 || res.status >= 500) {
+              throw new Error(`Server error: The backend may be down or unreachable. Check ${API_BASE_URL}`);
+            }
             throw new Error(`Storage upload failed: ${errText || `HTTP ${res.status}`}`);
           }
           
           const data = await res.json();
+          if (!data || !data.url) {
+            throw new Error('Invalid response from server: missing URL');
+          }
           console.log(`[Upload] Success: ${data.url}`);
           return data.url;
         } catch (fetchErr: any) {
           clearTimeout(timeoutId);
           if (fetchErr.name === 'AbortError') {
-            throw new Error('Upload timeout: File is too large or connection is too slow');
+            throw new Error('Upload timeout: File is too large or connection is too slow. Try a smaller file or check your internet connection.');
+          }
+          // Re-throw with more context if it's a network error
+          if (fetchErr.message && (fetchErr.message.includes('Network request failed') || fetchErr.message.includes('NetworkError') || fetchErr.message.includes('Failed to fetch'))) {
+            throw new Error(`Network error: Cannot reach ${API_BASE_URL}. Check your internet connection and ensure the backend is running.`);
           }
           throw fetchErr;
         }
