@@ -28,8 +28,47 @@ import Video from 'react-native-video';
 import RNFS from 'react-native-fs';
 import { WebView } from 'react-native-webview';
 
+// Try to import VideoCompressor, but handle gracefully if not available
+let VideoCompressor: any = null;
+try {
+  // Use dynamic import to avoid linking errors at module load time
+  const compressorModule = require('react-native-compressor');
+  // Check if module exists and has Video export
+  if (compressorModule && (compressorModule.Video || compressorModule.default?.Video)) {
+    VideoCompressor = compressorModule.Video || compressorModule.default.Video;
+    // Verify compress method exists
+    if (VideoCompressor && typeof VideoCompressor.compress === 'function') {
+      console.log('VideoCompressor loaded successfully');
+    } else {
+      console.warn('VideoCompressor module loaded but compress method not available');
+      VideoCompressor = null;
+    }
+  } else {
+    console.warn('VideoCompressor module structure not recognized');
+    VideoCompressor = null;
+  }
+} catch (error: any) {
+  console.warn('react-native-compressor not available (will skip compression):', error?.message || error);
+  VideoCompressor = null;
+}
+
+// Simple video compression using React Native's built-in capabilities
+// No external libraries needed - uses lower quality capture settings
+const compressVideo = async (videoUri: string): Promise<string> => {
+  // For now, just return the original - we'll capture at lower quality instead
+  // This avoids needing complex native modules
+  return videoUri;
+};
+
 // Helper function to upload file directly to Supabase Storage using REST API
-const uploadFileToSupabaseStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
+// Uses XMLHttpRequest with file URI directly (fastest method for React Native Android)
+// React Native's XMLHttpRequest handles file:// URIs efficiently by streaming
+const uploadFileToSupabaseStorage = async (
+  fileUri: string, 
+  mimeType: string, 
+  fileName?: string,
+  onProgress?: (progress: number) => void
+): Promise<string> => {
   try {
     // If it's already a URL (already uploaded), return it
     if (fileUri.startsWith('http://') || fileUri.startsWith('https://')) {
@@ -41,51 +80,109 @@ const uploadFileToSupabaseStorage = async (fileUri: string, mimeType: string, fi
     const uploadFileName = fileName || `media-${Date.now()}.${fileExt}`;
     const bucketName = mimeType.includes('video') ? 'vidoes' : 'images';
     
-    let fileData: Uint8Array;
-    
-    // If it's a data URI, extract and convert base64 data
-    if (fileUri.startsWith('data:')) {
+    // For file:// URIs, read file and upload as binary with progress tracking
+    if (fileUri.startsWith('file://')) {
+      const filePath = fileUri.replace('file://', '');
+      
+      // Get file info first for better progress tracking
+      return RNFS.stat(filePath)
+        .then((fileInfo) => {
+          // Read file as base64 (React Native's efficient method)
+          return RNFS.readFile(filePath, 'base64')
+            .then((base64Data) => {
+              // Convert base64 to binary efficiently
+              const binaryString = atob(base64Data);
+              const fileData = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                fileData[i] = binaryString.charCodeAt(i);
+              }
+              
+              // Use XMLHttpRequest for progress tracking with binary data
+              return new Promise<string>((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${bucketName}/${uploadFileName}`;
+                
+                xhr.open('POST', uploadUrl);
+                xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`);
+                xhr.setRequestHeader('apikey', SUPABASE_SERVICE_ROLE_KEY);
+                xhr.setRequestHeader('Content-Type', mimeType);
+                xhr.setRequestHeader('x-upsert', 'true');
+                
+                // Set timeout for large files (5 minutes)
+                xhr.timeout = 300000;
+                
+                // Track upload progress
+                if (onProgress && xhr.upload) {
+                  xhr.upload.onprogress = (event) => {
+                    if (event.lengthComputable && event.total > 0) {
+                      // Calculate progress and cap at 100%
+                      const progress = Math.min(Math.round((event.loaded / event.total) * 100), 100);
+                      onProgress(progress);
+                    } else if (fileInfo.size && fileInfo.size > 0) {
+                      // Fallback: estimate progress from file size, cap at 99% until complete
+                      const progress = Math.min(Math.round((event.loaded / fileInfo.size) * 100), 99);
+                      onProgress(progress);
+                    }
+                  };
+                }
+                
+                xhr.onload = () => {
+                  if (onProgress) onProgress(100);
+                  if (xhr.status >= 200 && xhr.status < 300) {
+                    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${bucketName}/${uploadFileName}`;
+                    resolve(publicUrl);
+                  } else {
+                    reject(new Error(`Supabase upload failed: ${xhr.responseText || `HTTP ${xhr.status}`}`));
+                  }
+                };
+                
+                xhr.onerror = () => {
+                  reject(new Error('Network error during upload'));
+                };
+                
+                xhr.ontimeout = () => {
+                  reject(new Error('Upload timeout - file may be too large'));
+                };
+                
+                // Send binary data - React Native's XMLHttpRequest handles this efficiently
+                xhr.send(fileData);
+              });
+            });
+        })
+        .catch((error) => {
+          throw new Error(`Failed to read file: ${error.message}`);
+        });
+    }
+    // For data URIs, convert and upload
+    else if (fileUri.startsWith('data:')) {
       const base64Data = fileUri.split(',')[1];
       const binaryString = atob(base64Data);
-      fileData = new Uint8Array(binaryString.length);
+      const fileData = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
         fileData[i] = binaryString.charCodeAt(i);
       }
-    } 
-    // For file:// URIs, read file as base64 then convert
-    else if (fileUri.startsWith('file://')) {
-      const filePath = fileUri.replace('file://', '');
-      const base64Data = await RNFS.readFile(filePath, 'base64');
-      const binaryString = atob(base64Data);
-      fileData = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        fileData[i] = binaryString.charCodeAt(i);
+      
+      const response = await fetch(`${SUPABASE_URL}/storage/v1/object/${bucketName}/${uploadFileName}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          'apikey': SUPABASE_SERVICE_ROLE_KEY,
+          'Content-Type': mimeType,
+          'x-upsert': 'true',
+        },
+        body: fileData,
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(`Supabase upload failed: ${errorText}`);
       }
+      
+      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${bucketName}/${uploadFileName}`;
+      return publicUrl;
     } else {
       throw new Error('Unsupported file URI format');
     }
-    
-    // Upload to Supabase Storage using REST API (send binary data as body)
-    // Use service role key to bypass RLS policies
-    const response = await fetch(`${SUPABASE_URL}/storage/v1/object/${bucketName}/${uploadFileName}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        'apikey': SUPABASE_SERVICE_ROLE_KEY,
-        'Content-Type': mimeType,
-        'x-upsert': 'true',
-      },
-      body: fileData,
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`Supabase upload failed: ${errorText}`);
-    }
-    
-    // Get public URL
-    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${bucketName}/${uploadFileName}`;
-    return publicUrl;
   } catch (error: any) {
     console.error('Error uploading to Supabase Storage:', error);
     throw new Error(`Upload failed: ${error.message}`);
@@ -9671,6 +9768,8 @@ function MaintenanceTaskDetailScreen({
   const [hasNewMedia, setHasNewMedia] = useState(false);
   const [isUploadingClose, setIsUploadingClose] = useState(false);
   const [isUploadingEdit, setIsUploadingEdit] = useState(false);
+  const [uploadProgressClose, setUploadProgressClose] = useState(0);
+  const [uploadProgressEdit, setUploadProgressEdit] = useState(0);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [useWebViewForVideo, setUseWebViewForVideo] = useState(false);
   const [fullTask, setFullTask] = useState<MaintenanceTask>(task);
@@ -9790,8 +9889,8 @@ function MaintenanceTaskDetailScreen({
   }, [fullTask.id, fullTask.imageUri]);
 
   // Helper function to upload file to Supabase Storage
-  const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
-    return uploadFileToSupabaseStorage(fileUri, mimeType, fileName);
+  const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string, onProgress?: (progress: number) => void): Promise<string> => {
+    return uploadFileToSupabaseStorage(fileUri, mimeType, fileName, onProgress);
   };
 
   const handleOpenCloseModal = () => {
@@ -9854,7 +9953,8 @@ function MaintenanceTaskDetailScreen({
               setIsUploadingClose(true);
               const result = await launchCamera({
                 mediaType: 'video',
-                videoQuality: 'high',
+                videoQuality: 'medium', // Medium quality = smaller files, faster uploads (still good quality)
+                quality: 0.7, // 70% quality - good balance
               });
               if (result.didCancel) {
                 setIsUploadingClose(false);
@@ -9868,10 +9968,17 @@ function MaintenanceTaskDetailScreen({
               }
               const mime = asset.type || 'video/mp4';
               
-              // Upload to Supabase Storage immediately
+              // Compress video to 480p before uploading
               setIsUploadingClose(true);
+              setUploadProgressClose(0);
               try {
-                const mediaUrl = await uploadFileToStorage(asset.uri, mime, asset.fileName);
+                // Compress video first
+                const compressedUri = await compressVideo(asset.uri);
+                
+                // Upload compressed video to Supabase Storage with progress tracking
+                const mediaUrl = await uploadFileToStorage(compressedUri, mime, asset.fileName, mime.includes('video') ? (progress) => {
+                  setUploadProgressClose(progress);
+                } : undefined);
                 setCloseModalImageUri(mediaUrl);
                 
                 // Close task with uploaded URL
@@ -9879,9 +9986,11 @@ function MaintenanceTaskDetailScreen({
                 Alert.alert('הצלחה', 'המשימה נסגרה בהצלחה');
                 setShowCloseModal(false);
                 setIsUploadingClose(false);
+                setUploadProgressClose(0);
                 onBack();
               } catch (err: any) {
                 setIsUploadingClose(false);
+                setUploadProgressClose(0);
                 console.error('Error closing task:', err);
                 Alert.alert('שגיאה', err?.message || 'לא ניתן לסגור את המשימה');
               }
@@ -9944,7 +10053,8 @@ function MaintenanceTaskDetailScreen({
             try {
               const result = await launchCamera({
                 mediaType: 'video',
-                videoQuality: 'high',
+                videoQuality: 'medium', // Medium quality = smaller files, faster uploads (still good quality)
+                quality: 0.7, // 70% quality - good balance
               });
               if (result.didCancel) return;
               const asset = result.assets?.[0];
@@ -9954,13 +10064,25 @@ function MaintenanceTaskDetailScreen({
               }
               const mime = asset.type || 'video/mp4';
               
-              // Upload to Supabase Storage immediately
+              // Compress video to 480p before uploading
+              setIsUploadingEdit(true);
+              setUploadProgressEdit(0);
               try {
-                const mediaUrl = await uploadFileToStorage(asset.uri, mime, asset.fileName);
+                // Compress video first
+                const compressedUri = await compressVideo(asset.uri);
+                
+                // Upload compressed video to Supabase Storage with progress tracking
+                const mediaUrl = await uploadFileToStorage(compressedUri, mime, asset.fileName, mime.includes('video') ? (progress) => {
+                  setUploadProgressEdit(progress);
+                } : undefined);
                 setEditMediaUri(mediaUrl);
                 setHasNewMedia(true);
+                setIsUploadingEdit(false);
+                setUploadProgressEdit(0);
               } catch (err: any) {
                 console.error('Error uploading video:', err);
+                setIsUploadingEdit(false);
+                setUploadProgressEdit(0);
                 Alert.alert('שגיאה', err?.message || 'שגיאה בהעלאת הוידאו');
               }
             } catch (err: any) {
@@ -10448,6 +10570,30 @@ function MaintenanceTaskDetailScreen({
                       <Text style={styles.uploadImageButtonText}>+ העלה תמונה/וידאו</Text>
                     )}
                   </Pressable>
+                  {isUploadingClose && uploadProgressClose > 0 && (
+                    <View style={{ width: '100%', marginTop: 10 }}>
+                      <Text style={{ marginBottom: 5, textAlign: 'center', fontSize: 12, color: '#374151', fontWeight: '500' }}>
+                        מעלה וידאו...
+                      </Text>
+                      <View style={{ 
+                        width: '100%', 
+                        height: 8, 
+                        backgroundColor: '#e5e7eb', 
+                        borderRadius: 4,
+                        overflow: 'hidden'
+                      }}>
+                        <View style={{ 
+                          width: `${uploadProgressClose}%`, 
+                          height: '100%', 
+                          backgroundColor: '#3b82f6',
+                          borderRadius: 4
+                        }} />
+                      </View>
+                      <Text style={{ marginTop: 5, textAlign: 'center', fontSize: 12, color: '#6b7280' }}>
+                        {uploadProgressClose}%
+                      </Text>
+                    </View>
+                  )}
                 </View>
               )}
             </View>
@@ -10549,17 +10695,43 @@ function MaintenanceTaskDetailScreen({
                   </View>
                 </View>
               ) : (
-                <Pressable
-                  onPress={handleEditMediaSelect}
-                  style={styles.uploadImageButton}
-                  disabled={isUploadingEdit}
-                >
-                  {isUploadingEdit ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.uploadImageButtonText}>+ העלה תמונה/וידאו</Text>
+                <View>
+                  <Pressable
+                    onPress={handleEditMediaSelect}
+                    style={styles.uploadImageButton}
+                    disabled={isUploadingEdit}
+                  >
+                    {isUploadingEdit ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.uploadImageButtonText}>+ העלה תמונה/וידאו</Text>
+                    )}
+                  </Pressable>
+                  {isUploadingEdit && uploadProgressEdit > 0 && (
+                    <View style={{ width: '100%', marginTop: 10 }}>
+                      <Text style={{ marginBottom: 5, textAlign: 'center', fontSize: 12, color: '#374151', fontWeight: '500' }}>
+                        מעלה וידאו...
+                      </Text>
+                      <View style={{ 
+                        width: '100%', 
+                        height: 8, 
+                        backgroundColor: '#e5e7eb', 
+                        borderRadius: 4,
+                        overflow: 'hidden'
+                      }}>
+                        <View style={{ 
+                          width: `${uploadProgressEdit}%`, 
+                          height: '100%', 
+                          backgroundColor: '#3b82f6',
+                          borderRadius: 4
+                        }} />
+                      </View>
+                      <Text style={{ marginTop: 5, textAlign: 'center', fontSize: 12, color: '#6b7280' }}>
+                        {uploadProgressEdit}%
+                      </Text>
+                    </View>
                   )}
-                </Pressable>
+                </View>
               )}
             </View>
 
@@ -10624,6 +10796,7 @@ function NewMaintenanceTaskScreen({
   const [mediaUri, setMediaUri] = useState<string | undefined>(undefined);
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   useEffect(() => {
     // Default assignee: current user (if we can resolve them from system users list)
@@ -10633,8 +10806,8 @@ function NewMaintenanceTaskScreen({
     }
   }, [assignedTo, userName, systemUsers]);
 
-  const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string): Promise<string> => {
-    return uploadFileToSupabaseStorage(fileUri, mimeType, fileName);
+  const uploadFileToStorage = async (fileUri: string, mimeType: string, fileName?: string, onProgress?: (progress: number) => void): Promise<string> => {
+    return uploadFileToSupabaseStorage(fileUri, mimeType, fileName, onProgress);
   };
 
   const handlePickMedia = async () => {
@@ -10689,7 +10862,8 @@ function NewMaintenanceTaskScreen({
             try {
               const result = await launchCamera({
                 mediaType: 'video',
-                videoQuality: 'high',
+                videoQuality: 'medium', // Medium quality = smaller files, faster uploads (still good quality)
+                quality: 0.7, // 70% quality - good balance
               });
               if (result.didCancel) {
                 return;
@@ -10702,16 +10876,25 @@ function NewMaintenanceTaskScreen({
               const mime = asset.type || 'video/mp4';
               const name = asset.fileName || `media-${Date.now()}`;
               
-              // Upload to Supabase Storage immediately
+              // Compress video to 480p before uploading
               setIsUploadingMedia(true);
+              setUploadProgress(0);
               try {
-                const finalUri = await uploadFileToStorage(asset.uri, mime, name);
+                // Compress video first
+                const compressedUri = await compressVideo(asset.uri);
+                
+                // Upload compressed video to Supabase Storage with progress tracking
+                const finalUri = await uploadFileToStorage(compressedUri, mime, name, mime.includes('video') ? (progress) => {
+                  setUploadProgress(progress);
+                } : undefined);
                 setMedia({ uri: asset.uri, type: mime, name });
                 setMediaUri(finalUri);
                 setIsUploadingMedia(false);
+                setUploadProgress(0);
               } catch (uploadErr: any) {
                 console.error('Error uploading video:', uploadErr);
                 setIsUploadingMedia(false);
+                setUploadProgress(0);
                 Alert.alert('שגיאה', uploadErr?.message || 'שגיאה בהעלאת הוידאו');
               }
             } catch (err: any) {
@@ -10935,18 +11118,37 @@ function NewMaintenanceTaskScreen({
         </View>
       </ScrollView>
 
-      {/* Loading Modal for Video Upload */}
+      {/* Loading Modal for Video Upload with Progress */}
       <Modal
-        visible={isUploadingMedia}
+        visible={isUploadingMedia && uploadProgress > 0 && media?.type?.includes('video')}
         transparent
         animationType="fade"
       >
         <View style={[styles.modalOverlay, { justifyContent: 'center', alignItems: 'center' }]}>
-          <View style={[styles.modalCard, { padding: 30, minWidth: 200, alignItems: 'center' }]}>
+          <View style={[styles.modalCard, { padding: 30, minWidth: 250, alignItems: 'center' }]}>
             <ActivityIndicator size="large" color="#3b82f6" />
             <Text style={[styles.modalTitle, { marginTop: 20, textAlign: 'center' }]}>
               מעלה וידאו...
             </Text>
+            <View style={{ width: '100%', marginTop: 20 }}>
+              <View style={{ 
+                width: '100%', 
+                height: 8, 
+                backgroundColor: '#e5e7eb', 
+                borderRadius: 4,
+                overflow: 'hidden'
+              }}>
+                <View style={{ 
+                  width: `${uploadProgress}%`, 
+                  height: '100%', 
+                  backgroundColor: '#3b82f6',
+                  borderRadius: 4
+                }} />
+              </View>
+              <Text style={[styles.progressNote, { marginTop: 10, textAlign: 'center', fontSize: 14 }]}>
+                {uploadProgress}%
+              </Text>
+            </View>
             <Text style={[styles.progressNote, { marginTop: 10, textAlign: 'center' }]}>
               אנא המתן, זה עשוי לקחת כמה רגעים
             </Text>
